@@ -5,9 +5,18 @@ from pathlib import Path
 # Add project root to path
 sys.path.append(str(Path(__file__).parent))
 
-from data_fetcher import DataFetcherTab
+from tabs.data_fetcher_tab import DataFetcherTab
+from tabs.model_training_tab import ModelTrainingTab
+from tabs.backtesting_tab import BacktestingTab
+from tabs.auto_trading_tab import AutoTradingTab
+from utils.logger import setup_logger
+
+# Setup logger
+logger = setup_logger('main', 'logs/main.log')
 
 def main():
+    logger.info("Starting Crypto Trading Automation System")
+    
     st.set_page_config(
         page_title="加密貨幣自動交易系統",
         page_icon="📊",
@@ -25,19 +34,20 @@ def main():
     ])
     
     with tab1:
+        logger.info("Loading Data Fetcher Tab")
         DataFetcherTab().render()
     
     with tab2:
-        st.header("模型訓練")
-        st.info("模型訓練功能開發中")
+        logger.info("Loading Model Training Tab")
+        ModelTrainingTab().render()
     
     with tab3:
-        st.header("策略回測")
-        st.info("策略回測功能開發中")
+        logger.info("Loading Backtesting Tab")
+        BacktestingTab().render()
     
     with tab4:
-        st.header("自動交易")
-        st.info("自動交易功能開發中")
+        logger.info("Loading Auto Trading Tab")
+        AutoTradingTab().render()
 
 if __name__ == "__main__":
     main()
