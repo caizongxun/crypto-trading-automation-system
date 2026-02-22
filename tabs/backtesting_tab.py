@@ -22,12 +22,13 @@ class BacktestingTab:
         st.header("策略回測")
         
         st.markdown("""
-        ### 事件驅動回測引擎 - 機構級別驗證
+        ### 事件骅動回測引擎 - 機構級別驗證 + 時間濾網
         
-        **三大防線**:
+        **三大防線 + 黃金時段過濾**:
         - 🛡️ **T+1 執行**: 訊號在 t 時刻產生，在 t+1 開盤價執行
         - 🛡️ **悉觀假設**: 同時觸及 SL/TP 時，假設先觸及 SL
-        - 🛡️ **摩擦成本**: 手續費 + 滑價 = 0.10-0.12% / 交易
+        - 🛡️ **摩擦成本**: Taker 0.10% / Maker 0.02%
+        - ⭐ **時間濾網**: 只在黃金時段進場 (09:00-13:59, 18:00-21:59 UTC)
         """)
         
         st.markdown("---")
@@ -49,7 +50,7 @@ class BacktestingTab:
             selected_model = st.selectbox(
                 "選擇模型",
                 [f.name for f in model_files],
-                key="backtest_model_selectbox"  # 添加 unique key
+                key="backtest_model_selectbox"
             )
         
         with col2:
@@ -66,7 +67,7 @@ class BacktestingTab:
             selected_features = st.selectbox(
                 "選擇特徵檔案",
                 [f.name for f in feature_files],
-                key="backtest_features_selectbox"  # 添加 unique key
+                key="backtest_features_selectbox"
             )
         
         st.markdown("---")
@@ -82,7 +83,7 @@ class BacktestingTab:
                 min_value=1000,
                 max_value=1000000,
                 value=10000,
-                key="backtest_capital"  # 添加 unique key
+                key="backtest_capital"
             )
         
         with col2:
@@ -92,7 +93,7 @@ class BacktestingTab:
                 max_value=5.0,
                 value=2.0,
                 step=0.5,
-                key="backtest_risk_reward"  # 添加 unique key
+                key="backtest_risk_reward"
             )
         
         with col3:
@@ -102,7 +103,7 @@ class BacktestingTab:
                 max_value=5.0,
                 value=1.0,
                 step=0.1,
-                key="backtest_stop_loss"  # 添加 unique key
+                key="backtest_stop_loss"
             ) / 100
         
         with col4:
@@ -112,8 +113,34 @@ class BacktestingTab:
                 max_value=0.8,
                 value=0.5,
                 step=0.05,
-                key="backtest_threshold"  # 添加 unique key
+                key="backtest_threshold"
             )
+        
+        st.markdown("---")
+        
+        # 進階選項
+        st.subheader("進階選項")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            use_time_filter = st.checkbox(
+                "啟用時間濾網 (只在黃金時段進場)",
+                value=True,
+                key="backtest_time_filter",
+                help="過濾低流動性時段，只在 09:00-13:59, 18:00-21:59 (UTC) 進場"
+            )
+        
+        with col2:
+            use_maker_fee = st.checkbox(
+                "使用 Maker 手續費 (0.01%)",
+                value=False,
+                key="backtest_maker_fee",
+                help="模擬限價單 (Maker) 手續費 0.01%，預設為市價單 (Taker) 0.04%"
+            )
+        
+        if use_time_filter:
+            st.info("⭐ 時間濾網已啟用: 根據歷史回測分析，只允許在高勝率時段進場")
         
         st.markdown("---")
         
@@ -125,12 +152,15 @@ class BacktestingTab:
                 initial_capital,
                 risk_reward,
                 stop_loss_pct,
-                threshold
+                threshold,
+                use_time_filter,
+                use_maker_fee
             )
     
     def run_backtest(self, model_path: Path, features_path: Path,
                     initial_capital: float, risk_reward: float,
-                    stop_loss_pct: float, threshold: float):
+                    stop_loss_pct: float, threshold: float,
+                    use_time_filter: bool, use_maker_fee: bool):
         logger.info(f"Starting backtest with model={model_path}, features={features_path}")
         
         with st.spinner("載入資料..."):
@@ -141,7 +171,7 @@ class BacktestingTab:
                 st.error(f"載入特徵失敗: {str(e)}")
                 return
         
-        # 切分測試集 (OOS - 後 20%)
+        # 切分測試集
         split_idx = int(len(features_df) * 0.8)
         test_df = features_df.iloc[split_idx:].copy()
         
@@ -151,11 +181,13 @@ class BacktestingTab:
         backtester = EventDrivenBacktester(
             initial_capital=initial_capital,
             risk_reward_ratio=risk_reward,
-            stop_loss_pct=stop_loss_pct
+            stop_loss_pct=stop_loss_pct,
+            use_time_filter=use_time_filter,
+            use_maker_fee=use_maker_fee
         )
         
         # 執行回測
-        with st.spinner("執行事件驅動回測... (可能需要幾分鐘)"):
+        with st.spinner("執行事件骅動回測... (可能需要幾分鐘)"):
             try:
                 results = backtester.run_backtest(
                     test_df,
@@ -164,7 +196,7 @@ class BacktestingTab:
                 )
                 
                 if results:
-                    self.display_results(results)
+                    self.display_results(results, use_time_filter, use_maker_fee)
                 else:
                     st.error("回測失敗")
             
@@ -172,10 +204,14 @@ class BacktestingTab:
                 logger.error(f"Backtest error: {str(e)}", exc_info=True)
                 st.error(f"回測錯誤: {str(e)}")
     
-    def display_results(self, results: dict):
+    def display_results(self, results: dict, use_time_filter: bool, use_maker_fee: bool):
         logger.info("Displaying backtest results")
         
         st.success("回測完成")
+        
+        # 顯示過濾統計
+        if use_time_filter and 'filtered_signals' in results:
+            st.info(f"⭐ 時間濾網已過濾 {results['filtered_signals']} 個低質量訊號")
         
         # 核心指標
         st.subheader("核心指標")
@@ -189,16 +225,20 @@ class BacktestingTab:
             )
         
         with col2:
+            win_rate = results['win_rate']
+            win_rate_delta = "+" if win_rate >= 0.33 else "-"
             st.metric(
                 "實盤勝率",
-                f"{results['win_rate']*100:.2f}%",
-                delta="目標: 33%+"
+                f"{win_rate*100:.2f}%",
+                delta=f"{win_rate_delta} 目標: 33%+"
             )
         
         with col3:
+            total_return = results['total_return']
             st.metric(
                 "總報酬",
-                f"{results['total_return']*100:.2f}%"
+                f"{total_return*100:.2f}%",
+                delta="正" if total_return > 0 else "負"
             )
         
         with col4:
@@ -212,6 +252,14 @@ class BacktestingTab:
                 "最大回撤",
                 f"{results['max_drawdown']*100:.2f}%"
             )
+        
+        # 評估
+        if win_rate >= 0.33 and total_return > 0:
+            st.success("✅ 策略達標！勝率 ≥ 33% 且總報酬為正，具備正期望值")
+        elif win_rate >= 0.33:
+            st.warning("⚠️ 勝率達標但報酬為負，考慮調整盈虧比或降低摩擦成本")
+        else:
+            st.error(f"❌ 勝率不足 ({win_rate*100:.2f}% < 33%)，需要優化模型或提高閉值")
         
         # 進階指標
         st.markdown("---")
@@ -251,7 +299,7 @@ class BacktestingTab:
             y=equity_df['equity'],
             mode='lines',
             name='Equity',
-            line=dict(color='blue', width=2)
+            line=dict(color='green' if total_return > 0 else 'red', width=2)
         ))
         
         fig.update_layout(
@@ -270,10 +318,9 @@ class BacktestingTab:
         
         trades_df = results['trades_df']
         
-        # 顯示前 20 筆交易
         display_df = trades_df[[
             'entry_time', 'exit_time', 'entry_price', 'exit_price',
-            'exit_reason', 'net_return', 'pnl', 'capital'
+            'exit_reason', 'net_return', 'pnl', 'capital', 'entry_hour'
         ]].head(20)
         
         display_df['net_return'] = display_df['net_return'].apply(lambda x: f"{x*100:.2f}%")
@@ -285,7 +332,6 @@ class BacktestingTab:
         # 下載報告
         st.markdown("---")
         
-        # 保存報告
         report_dir = Path("backtest_reports")
         report_dir.mkdir(exist_ok=True)
         
