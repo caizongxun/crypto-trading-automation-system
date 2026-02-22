@@ -10,11 +10,10 @@ from datetime import datetime
 sys.path.append(str(Path(__file__).parent.parent))
 from utils.logger import setup_logger
 from utils.model_trainer import ModelTrainer
-from utils.data_loader import DataLoader
 from utils.feature_engineering import FeatureEngineer
 from catboost import CatBoostClassifier
 from sklearn.calibration import CalibratedClassifierCV
-from sklearn.metrics import classification_report, roc_auc_score
+from sklearn.metrics import classification_report, roc_auc_score, precision_score, recall_score
 
 logger = setup_logger('model_training_tab', 'logs/model_training_tab.log')
 
@@ -71,14 +70,20 @@ class ModelTrainingTab:
         
         # Step 1: 載入資料
         with st.spinner("📊 載入 1m K 線..."):
-            data_loader = DataLoader()
-            df_1m = data_loader.load_klines('BTCUSDT', '1m')
+            klines_dir = Path("klines_output")
+            klines_file = klines_dir / "klines_BTCUSDT_1m.parquet"
             
-            if df_1m is None or df_1m.empty:
-                st.error("請先在 '數據下載' Tab 中下載 1m K 線")
+            if not klines_file.exists():
+                st.error("請先在 '數據下載' Tab 中下載 BTCUSDT 1m K 線")
                 return
             
-            st.success(f"✅ 載入 {len(df_1m):,} 筆 1m K 線")
+            try:
+                df_1m = pd.read_parquet(klines_file)
+                df_1m.set_index('open_time', inplace=True)
+                st.success(f"✅ 載入 {len(df_1m):,} 筆 1m K 線")
+            except Exception as e:
+                st.error(f"載入失敗: {str(e)}")
+                return
         
         # Step 2: 生成雙向特徵與標籤
         with st.spinner("⚙️ 生成雙向特徵與標籤 (label_long + label_short)..."):
@@ -231,7 +236,6 @@ class ModelTrainingTab:
             st.metric("AUC", f"{auc_long:.4f}", delta="目標: 0.65+")
             st.metric("標籤比例", f"{y_long_test.mean()*100:.2f}%")
             
-            from sklearn.metrics import precision_score, recall_score
             precision_long = precision_score(y_long_test, y_long_pred)
             recall_long = recall_score(y_long_test, y_long_pred)
             
@@ -287,87 +291,12 @@ class ModelTrainingTab:
     
     def render_unidirectional(self):
         """渲染單向訓練介面 (原有功能)"""
-        # 模型類型選擇
-        model_type = st.radio(
-            "選擇模型類型",
-            ['catboost', 'lightgbm'],
-            format_func=lambda x: 'CatBoost (推薦 - 機率校準)' if x == 'catboost' else 'LightGBM (傳統)',
-            horizontal=True,
-            key="model_type_selector"
-        )
+        st.info("🚧 單向訓練功能保留，請先使用雙向訓練")
+        st.markdown("""
+        此功能保留來與舊版本相容。
         
-        if model_type == 'catboost':
-            st.markdown("""
-            ### CatBoost 訓練架構 - 機率校準 + 時間序列切分
-            
-            **核心特性**:
-            - 帶淨空期的時間序列切分 (Purged Time-Series Split)
-            - Isotonic Regression 機率校準 (輸出真實統計機率)
-            - CatBoost 對稱樹 + L2 正則化
-            - Scale_pos_weight 自動計算
-            - Brier Score 監控機率校準質量
-            - AUC + Recall + Precision 多指標追蹤
-            """)
-        else:
-            st.markdown("""
-            ### LightGBM 訓練架構 - 防過擬合與時間序列切分
-            
-            **關鍵特性**:
-            - 嚴格 80/20 時間序列切分 (絕不打亂)
-            - Scale_pos_weight 自動計算 (處理不平衡)
-            - 特徵重要性監控
-            - AUC + Recall 雙指標追蹤
-            - OOS 樣本外驗證
-            """)
-        
-        st.markdown("---")
-        
-        # 選擇特徵檔案
-        features_dir = Path("features_output")
-        if not features_dir.exists():
-            st.warning("請先在 '特徵工程' Tab 中生成特徵檔案")
-            return
-        
-        feature_files = list(features_dir.glob("features_*_multi_tf.parquet"))
-        if not feature_files:
-            st.warning("沒有找到特徵檔案")
-            return
-        
-        file_options = [f.name for f in feature_files]
-        selected_file = st.selectbox("選擇特徵檔案", file_options, key="feature_file_selector")
-        
-        st.markdown("---")
-        
-        # 超參數設定
-        st.subheader("超參數設定")
-        
-        if model_type == 'catboost':
-            params = self.render_catboost_params()
-        else:
-            params = self.render_lightgbm_params()
-        
-        st.markdown("---")
-        
-        # 訓練按鈕
-        if st.button("開始訓練模型", use_container_width=True, key="train_button"):
-            self.train_model(features_dir / selected_file, model_type, params)
-    
-    def render_catboost_params(self) -> dict:
-        """...略..."""
-        # 保持原有邏輯
-        pass
-    
-    def render_lightgbm_params(self) -> dict:
-        """...略..."""
-        # 保持原有邏輯
-        pass
-    
-    def train_model(self, feature_file: Path, model_type: str, params: dict):
-        """...略..."""
-        # 保持原有單向訓練邏輯
-        pass
-    
-    def display_results(self, results: dict, model_name: str, model_type: str):
-        """...略..."""
-        # 保持原有顯示邏輯
-        pass
+        **建議使用雙向訓練**：
+        - 更高交易頻率
+        - 市場中性策略
+        - 牛熊市都能獲利
+        """)
