@@ -69,16 +69,17 @@ class ModelTrainingTab:
     def render_bidirectional(self):
         """雙向訓練介面"""
         st.markdown("""
-        ### 雙向狩獵架構 - Bidirectional Hunting
+        ### 雙向狩獵架構 - Bidirectional Hunting (廣播版)
         
         **核心概念**:
         - Long Oracle: 捕捉底部反轉、W 底、上漲突破
         - Short Oracle: 捕捉頂部背離、M 頭、下跌突破
         
-        **優勢**:
-        - 交易次數翻倍 (100 -> 200+ 次)
-        - 報酬倍增 (+5% -> +10%+)
-        - 市場中性 (牛熊市都賺錢)
+        **廣播架構優勢**:
+        - 保持 1m 級別精準進場
+        - 結合 15m 微觀軌跡特徵
+        - 樣本數: 1,050,000+ 筆
+        - 正標籤: 15-18% (健康區間)
         
         **標籤邏輯**:
         - Long: 未來 4 小時先漲 2% (停利) 且沒先跌 1% (停損)
@@ -91,10 +92,10 @@ class ModelTrainingTab:
             self.train_bidirectional()
     
     def train_bidirectional(self):
-        """執行雙向訓練"""
-        logger.info("Starting bidirectional training")
+        """執行雙向訓練 - 廣播架構"""
+        logger.info("Starting bidirectional training with broadcast architecture")
         
-        # Step 1: 載入 1m 數據 (與 feature_engineer.py 相同方式)
+        # Step 1: 載入 1m 數據
         with st.spinner("載入 1m K 線 (from HuggingFace)..."):
             df_1m = self.load_klines("BTCUSDT", "1m")
             
@@ -116,22 +117,28 @@ class ModelTrainingTab:
             
             st.success(f"載入 {len(df_1m):,} 筆 1m K 線")
         
-        # Step 2: 生成雙向標籤
-        with st.spinner("生成雙向特徵與標籤..."):
-            # 壓縮為 15m
-            df_15m = self.micro_engineer.compress_1m_to_15m(df_1m)
-            
-            # 生成雙向標籤
-            df_features = self.micro_engineer.add_bidirectional_labels(
-                df_15m,
-                lookahead_bars=16,
+        # Step 2: 計算 15m 微觀特徵
+        with st.spinner("計算 15m 微觀軌跡特徵..."):
+            df_15m_features = self.micro_engineer.calculate_15m_micro_features(df_1m)
+            st.success(f"生成 {len(df_15m_features):,} 筆 15m 特徵")
+        
+        # Step 3: 廣播回 1m
+        with st.spinner("廣播 15m 特徵回 1m 級別..."):
+            df_features = self.micro_engineer.broadcast_15m_to_1m(df_1m, df_15m_features)
+            st.success(f"廣播完成: {len(df_features):,} 筆 1m 數據 (含 15m 特徵)")
+        
+        # Step 4: 在 1m 級別生成雙向標籤
+        with st.spinner("生成雙向標籤 (1m 級別, lookahead=240 bars)..."):
+            df_features = self.micro_engineer.add_bidirectional_labels_1m(
+                df_features,
+                lookahead_bars=240,
                 tp_pct_long=0.02,
                 sl_pct_long=0.01,
                 tp_pct_short=0.02,
                 sl_pct_short=0.01
             )
             
-            st.success(f"生成 {len(df_features):,} 筆雙向標籤")
+            st.success(f"標籤生成完成: {len(df_features):,} 筆")
             
             # 顯示標籤分布
             col1, col2 = st.columns(2)
@@ -142,7 +149,7 @@ class ModelTrainingTab:
                 short_rate = df_features['label_short'].mean()
                 st.metric("Short 標籤比例", f"{short_rate*100:.2f}%")
         
-        # Step 3: 準備特徵矩陣
+        # Step 5: 準備特徵矩陣
         feature_cols = ['efficiency_ratio', 'extreme_time_diff', 'vol_imbalance_ratio']
         available_features = [col for col in feature_cols if col in df_features.columns]
         
@@ -162,11 +169,18 @@ class ModelTrainingTab:
         
         st.info(f"訓練集: {len(X_train):,}, 測試集: {len(X_test):,}")
         
-        # Step 4: 訓練 Long Oracle
+        # Step 6: 動態計算 scale_pos_weight
+        long_pos_weight = (1 - y_long_train.mean()) / y_long_train.mean()
+        short_pos_weight = (1 - y_short_train.mean()) / y_short_train.mean()
+        
+        st.info(f"Long scale_pos_weight: {long_pos_weight:.2f}")
+        st.info(f"Short scale_pos_weight: {short_pos_weight:.2f}")
+        
+        # Step 7: 訓練 Long Oracle
         st.markdown("---")
         st.subheader("訓練 Long Oracle")
         
-        with st.spinner("訓練 Long 模型中... (2-3 分鐘)"):
+        with st.spinner("訓練 Long 模型中... (5-10 分鐘)"):
             model_long = CatBoostClassifier(
                 iterations=500,
                 learning_rate=0.05,
@@ -176,6 +190,7 @@ class ModelTrainingTab:
                 bagging_temperature=0.2,
                 loss_function='Logloss',
                 eval_metric='AUC',
+                scale_pos_weight=long_pos_weight,
                 verbose=False,
                 random_seed=42,
                 task_type='CPU'
@@ -203,11 +218,11 @@ class ModelTrainingTab:
             
             st.success(f"Long Oracle 訓練完成 - AUC: {auc_long:.4f}")
         
-        # Step 5: 訓練 Short Oracle
+        # Step 8: 訓練 Short Oracle
         st.markdown("---")
         st.subheader("訓練 Short Oracle")
         
-        with st.spinner("訓練 Short 模型中... (2-3 分鐘)"):
+        with st.spinner("訓練 Short 模型中... (5-10 分鐘)"):
             model_short = CatBoostClassifier(
                 iterations=500,
                 learning_rate=0.05,
@@ -217,6 +232,7 @@ class ModelTrainingTab:
                 bagging_temperature=0.2,
                 loss_function='Logloss',
                 eval_metric='AUC',
+                scale_pos_weight=short_pos_weight,
                 verbose=False,
                 random_seed=42,
                 task_type='CPU'
@@ -244,7 +260,7 @@ class ModelTrainingTab:
             
             st.success(f"Short Oracle 訓練完成 - AUC: {auc_short:.4f}")
         
-        # Step 6: 保存模型
+        # Step 9: 保存模型
         st.markdown("---")
         st.subheader("保存模型")
         
@@ -262,43 +278,46 @@ class ModelTrainingTab:
         st.success(f"Long Oracle: {long_model_path.name}")
         st.success(f"Short Oracle: {short_model_path.name}")
         
-        # Step 7: 綜合報告
+        # Step 10: 綜合報告
         st.markdown("---")
-        st.subheader("雙向模型績效")
+        st.subheader("雙向模型績效 (廣播架構)")
         
         col1, col2 = st.columns(2)
         
         with col1:
             st.markdown("### Long Oracle")
-            st.metric("AUC", f"{auc_long:.4f}", delta="目標: 0.65+")
+            st.metric("AUC", f"{auc_long:.4f}", delta="目標: 0.75+")
             st.metric("標籤比例", f"{y_long_test.mean()*100:.2f}%")
             
-            precision_long = precision_score(y_long_test, y_long_pred)
-            recall_long = recall_score(y_long_test, y_long_pred)
+            precision_long = precision_score(y_long_test, y_long_pred, zero_division=0)
+            recall_long = recall_score(y_long_test, y_long_pred, zero_division=0)
             
             st.metric("Precision", f"{precision_long:.4f}")
             st.metric("Recall", f"{recall_long:.4f}")
         
         with col2:
             st.markdown("### Short Oracle")
-            st.metric("AUC", f"{auc_short:.4f}", delta="目標: 0.65+")
+            st.metric("AUC", f"{auc_short:.4f}", delta="目標: 0.75+")
             st.metric("標籤比例", f"{y_short_test.mean()*100:.2f}%")
             
-            precision_short = precision_score(y_short_test, y_short_pred)
-            recall_short = recall_score(y_short_test, y_short_pred)
+            precision_short = precision_score(y_short_test, y_short_pred, zero_division=0)
+            recall_short = recall_score(y_short_test, y_short_pred, zero_division=0)
             
             st.metric("Precision", f"{precision_short:.4f}")
             st.metric("Recall", f"{recall_short:.4f}")
         
         # 評估
-        if auc_long >= 0.65 and auc_short >= 0.65:
-            st.success("雙向模型達標！兩個 Oracle AUC 都超過 0.65")
+        if auc_long >= 0.75 and auc_short >= 0.75:
+            st.success("雙向模型達標！兩個 Oracle AUC 都超過 0.75")
+        elif auc_long >= 0.65 and auc_short >= 0.65:
+            st.info("模型合格，但有提升空間")
         else:
-            st.warning("模型效能可提升，建議調整超參數或增加資料")
+            st.warning("模型效能不佳，建議檢查數據質量")
         
         # 保存報告
         report = {
             'timestamp': timestamp,
+            'architecture': 'broadcast',
             'total_samples': len(df_features),
             'train_samples': len(X_train),
             'test_samples': len(X_test),
@@ -307,6 +326,7 @@ class ModelTrainingTab:
                 'precision': float(precision_long),
                 'recall': float(recall_long),
                 'positive_rate': float(y_long_test.mean()),
+                'scale_pos_weight': float(long_pos_weight),
                 'model_path': str(long_model_path)
             },
             'short_oracle': {
@@ -314,6 +334,7 @@ class ModelTrainingTab:
                 'precision': float(precision_short),
                 'recall': float(recall_short),
                 'positive_rate': float(y_short_test.mean()),
+                'scale_pos_weight': float(short_pos_weight),
                 'model_path': str(short_model_path)
             }
         }
@@ -324,7 +345,7 @@ class ModelTrainingTab:
         
         st.info(f"訓練報告: {report_path.name}")
         
-        logger.info(f"Bidirectional training completed: Long AUC={auc_long:.4f}, Short AUC={auc_short:.4f}")
+        logger.info(f"Bidirectional training completed (broadcast): Long AUC={auc_long:.4f}, Short AUC={auc_short:.4f}")
     
     def render_unidirectional(self):
         """單向訓練介面"""
