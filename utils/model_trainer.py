@@ -4,7 +4,7 @@ from pathlib import Path
 import lightgbm as lgb
 from catboost import CatBoostClassifier
 from sklearn.model_selection import TimeSeriesSplit
-from sklearn.calibration import CalibratedClassifierCV
+from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import (
     roc_auc_score, recall_score, precision_score, 
     confusion_matrix, roc_curve, brier_score_loss
@@ -16,6 +16,31 @@ sys.path.append(str(Path(__file__).parent.parent))
 from utils.logger import setup_logger
 
 logger = setup_logger('model_trainer', 'logs/model_trainer.log')
+
+class CalibratedCatBoost:
+    """手動實現的 CatBoost + Isotonic 校準器"""
+    
+    def __init__(self, base_model, calibrators):
+        self.base_model = base_model
+        self.calibrators = calibrators  # List of IsotonicRegression
+    
+    def predict_proba(self, X):
+        # 基礎模型預測
+        base_proba = self.base_model.predict_proba(X)[:, 1]
+        
+        # 使用所有校準器的平均
+        calibrated_probas = []
+        for calibrator in self.calibrators:
+            calibrated_proba = calibrator.predict(base_proba)
+            # 限制在 [0, 1]
+            calibrated_proba = np.clip(calibrated_proba, 0, 1)
+            calibrated_probas.append(calibrated_proba)
+        
+        # 平均所有 fold 的校準結果
+        final_proba = np.mean(calibrated_probas, axis=0)
+        
+        # 返回 [negative_proba, positive_proba]
+        return np.column_stack([1 - final_proba, final_proba])
 
 class ModelTrainer:
     """模型訓練器 - 支援 LightGBM 與 CatBoost (with Isotonic Calibration)"""
@@ -173,21 +198,17 @@ class ModelTrainer:
         return model, y_train_pred_proba, y_test_pred_proba, lgb_params
     
     def train_catboost(self, X_train, y_train, X_test, y_test, params: dict) -> dict:
-        """訓練 CatBoost 模型 (with Isotonic Calibration)"""
-        logger.info("Training CatBoost model with Isotonic calibration...")
+        """訓練 CatBoost 模型 (手動 Isotonic Calibration)"""
+        logger.info("Training CatBoost model with manual Isotonic calibration...")
         
         scale_pos_weight = self.calculate_scale_pos_weight(y_train)
         
-        # CatBoost 使用 class_weights 而不是 scale_pos_weight (相容 sklearn)
-        class_weights = {0: 1.0, 1: float(scale_pos_weight)}
-        
-        # CatBoost 基礎模型
+        # CatBoost 基礎模型 (不使用 class_weights)
         base_model = CatBoostClassifier(
             iterations=params.get('iterations', 1000),
             learning_rate=params.get('learning_rate', 0.03),
             depth=params.get('depth', 5),
             l2_leaf_reg=params.get('l2_leaf_reg', 5.0),
-            class_weights=class_weights,  # 改用 class_weights
             eval_metric='AUC',
             random_seed=42,
             verbose=False,
@@ -200,23 +221,62 @@ class ModelTrainer:
         logger.info(f"  learning_rate: {params.get('learning_rate', 0.03)}")
         logger.info(f"  depth: {params.get('depth', 5)}")
         logger.info(f"  l2_leaf_reg: {params.get('l2_leaf_reg', 5.0)}")
-        logger.info(f"  class_weights: {class_weights}")
+        logger.info(f"  scale_pos_weight (manual): {scale_pos_weight:.4f}")
         
-        # Isotonic 機率校準
+        # 手動實現時間序列交叉驗證校準
         lookahead_bars = params.get('lookahead_bars', 16)
         tscv = TimeSeriesSplit(n_splits=5, gap=lookahead_bars)
         
-        logger.info(f"Isotonic calibration with TimeSeriesSplit (gap={lookahead_bars})")
+        logger.info(f"Manual Isotonic calibration with TimeSeriesSplit (gap={lookahead_bars})")
         
-        calibrated_model = CalibratedClassifierCV(
-            estimator=base_model,
-            method='isotonic',
-            cv=tscv,
-            n_jobs=-1
-        )
+        # 先在全部訓練集訓練基礎模型
+        logger.info("Training base CatBoost model on full training set...")
         
-        # 訓練校準模型
-        calibrated_model.fit(X_train, y_train)
+        # 手動處理樣本權重 (使用 sample_weight)
+        sample_weights = np.ones(len(y_train))
+        sample_weights[y_train == 1] = scale_pos_weight
+        
+        base_model.fit(X_train, y_train, sample_weight=sample_weights, verbose=False)
+        
+        # 交叉驗證訓練校準器
+        calibrators = []
+        
+        logger.info("Training Isotonic calibrators with cross-validation...")
+        for fold_idx, (train_idx, val_idx) in enumerate(tscv.split(X_train), 1):
+            X_fold_train = X_train.iloc[train_idx]
+            y_fold_train = y_train.iloc[train_idx]
+            X_fold_val = X_train.iloc[val_idx]
+            y_fold_val = y_train.iloc[val_idx]
+            
+            # 訓練 fold 模型
+            fold_model = CatBoostClassifier(
+                iterations=params.get('iterations', 1000),
+                learning_rate=params.get('learning_rate', 0.03),
+                depth=params.get('depth', 5),
+                l2_leaf_reg=params.get('l2_leaf_reg', 5.0),
+                eval_metric='AUC',
+                random_seed=42,
+                verbose=False,
+                allow_writing_files=False
+            )
+            
+            fold_weights = np.ones(len(y_fold_train))
+            fold_weights[y_fold_train == 1] = scale_pos_weight
+            
+            fold_model.fit(X_fold_train, y_fold_train, sample_weight=fold_weights, verbose=False)
+            
+            # 預測驗證集
+            val_proba = fold_model.predict_proba(X_fold_val)[:, 1]
+            
+            # 訓練 Isotonic 校準器
+            calibrator = IsotonicRegression(out_of_bounds='clip')
+            calibrator.fit(val_proba, y_fold_val)
+            calibrators.append(calibrator)
+            
+            logger.info(f"  Fold {fold_idx}/5 completed")
+        
+        # 包裝成校準模型
+        calibrated_model = CalibratedCatBoost(base_model, calibrators)
         
         logger.info("CatBoost training and calibration completed")
         
@@ -288,8 +348,7 @@ class ModelTrainer:
                 feature_importance = model.feature_importance(importance_type='gain')
             else:
                 # CatBoost 校準後的模型，取基礎模型的特徵重要性
-                base_estimators = model.calibrated_classifiers_
-                feature_importance = base_estimators[0].estimator.feature_importances_
+                feature_importance = model.base_model.feature_importances_
             
             importance_df = pd.DataFrame({
                 'feature': feature_names,
