@@ -12,7 +12,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 from config import Config
 from utils.logger import setup_logger
 from utils.model_trainer import ModelTrainer
-from utils.micro_structure import MicroStructureEngineer
+from utils.feature_engineering import FeatureEngineer
 from catboost import CatBoostClassifier
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.model_selection import TimeSeriesSplit
@@ -23,7 +23,7 @@ logger = setup_logger('model_training_tab', 'logs/model_training_tab.log')
 class ModelTrainingTab:
     def __init__(self):
         logger.info("Initializing ModelTrainingTab")
-        self.micro_engineer = MicroStructureEngineer()
+        self.feature_engineer = FeatureEngineer()
     
     def render(self):
         logger.info("Rendering Model Training Tab")
@@ -70,17 +70,17 @@ class ModelTrainingTab:
     def render_bidirectional(self):
         """雙向訓練介面"""
         st.markdown("""
-        ### 雙向狩獵架構 - Bidirectional Hunting (廣播版)
+        ### 雙向狩獵架構 - Bidirectional Hunting (滾動視窗版)
         
         **核心概念**:
         - Long Oracle: 捕捉底部反轉、W 底、上漲突破
         - Short Oracle: 捕捉頂部背離、M 頭、下跌突破
         
-        **廣播架構優勢**:
-        - 保持 1m 級別精準進場
-        - 結合 15m 微觀軌跡特徵
-        - 樣本數: 1,050,000+ 筆
-        - 正標籤: 15-18% (健康區間)
+        **滾動視窗優勢**:
+        - 零延遲: 10:14 看到的就是 10:00-10:14 的軌跡
+        - 零盲區: 每一分鐘都有最新 15 分鐘特徵
+        - 零洩漏: rolling 只看過去,不看未來
+        - 樣本數: 1,048,000+ 筆 (捲 1440 筆)
         
         **標籤邏輯**:
         - Long: 未來 4 小時先漲 2% (停利) 且沒先跌 1% (停損)
@@ -93,9 +93,9 @@ class ModelTrainingTab:
             self.train_bidirectional()
     
     def train_bidirectional(self):
-        """執行雙向訓練 - 廣播架構 (無洩漏版)"""
+        """執行雙向訓練 - 滾動視窗架構"""
         logger.info("="*80)
-        logger.info("BIDIRECTIONAL TRAINING - BROADCAST ARCHITECTURE (LEAK-FREE)")
+        logger.info("BIDIRECTIONAL TRAINING - ROLLING WINDOW ARCHITECTURE")
         logger.info("="*80)
         
         # Step 1: 載入 1m 數據
@@ -121,45 +121,35 @@ class ModelTrainingTab:
             st.success(f"載入 {len(df_1m):,} 筆 1m K 線")
             logger.info(f"Loaded {len(df_1m):,} 1m bars")
         
-        # Step 2: 計算 15m 微觀特徵
-        with st.spinner("計算 15m 微觀軌跡特徵..."):
-            df_15m_features = self.micro_engineer.calculate_15m_micro_features(df_1m)
-            st.success(f"生成 {len(df_15m_features):,} 筆 15m 特徵")
-        
-        # Step 3: 廣播回 1m
-        with st.spinner("廣播 15m 特徵回 1m 級別..."):
-            df_features = self.micro_engineer.broadcast_15m_to_1m(df_1m, df_15m_features)
-            st.success(f"廣播完成: {len(df_features):,} 筆 1m 數據 (含 15m 特徵)")
-        
-        # Step 4: 在 1m 級別生成雙向標籤
-        with st.spinner("生成雙向標籤 (1m 級別, lookahead=240 bars)..."):
-            df_features = self.micro_engineer.add_bidirectional_labels_1m(
-                df_features,
-                lookahead_bars=240,
-                tp_pct_long=0.02,
-                sl_pct_long=0.01,
-                tp_pct_short=0.02,
-                sl_pct_short=0.01
+        # Step 2: 使用 FeatureEngineer 生成完整特徵 (滾動視窗)
+        with st.spinner("生成特徵 (滾動視窗架構)..."):
+            df_features = self.feature_engineer.create_features_from_1m(
+                df_1m,
+                use_micro_structure=True,
+                label_type='both'
             )
-            
-            st.success(f"標籤生成完成: {len(df_features):,} 筆")
-            
-            # 顯示標籤分布
-            col1, col2 = st.columns(2)
-            with col1:
-                long_rate = df_features['label_long'].mean()
-                st.metric("Long 標籤比例", f"{long_rate*100:.2f}%")
-            with col2:
-                short_rate = df_features['label_short'].mean()
-                st.metric("Short 標籤比例", f"{short_rate*100:.2f}%")
+            st.success(f"特徵生成完成: {len(df_features):,} 筆")
         
-        # Step 5: 準備特徵矩陣
-        feature_cols = ['efficiency_ratio', 'extreme_time_diff', 'vol_imbalance_ratio']
+        # 顯示標籤分布
+        col1, col2 = st.columns(2)
+        with col1:
+            long_rate = df_features['label_long'].mean()
+            st.metric("Long 標籤比例", f"{long_rate*100:.2f}%")
+        with col2:
+            short_rate = df_features['label_short'].mean()
+            st.metric("Short 標籤比例", f"{short_rate*100:.2f}%")
+        
+        # Step 3: 準備特徵矩陣
+        feature_cols = ['efficiency_ratio', 'extreme_time_diff', 'vol_imbalance_ratio',
+                       'z_score', 'bb_width_pct', 'rsi', 'atr_pct', 'z_score_1h', 'atr_pct_1d']
         available_features = [col for col in feature_cols if col in df_features.columns]
         
         if not available_features:
-            st.error("無法找到微觀結構特徵")
+            st.error("無法找到特徵")
             return
+        
+        logger.info(f"Using features: {available_features}")
+        st.info(f"使用 {len(available_features)} 個特徵: {', '.join(available_features)}")
         
         X = df_features[available_features].values
         y_long = df_features['label_long'].values
@@ -174,11 +164,11 @@ class ModelTrainingTab:
         st.info(f"訓練集: {len(X_train):,}, 測試集: {len(X_test):,}")
         logger.info(f"Train: {len(X_train):,}, Test: {len(X_test):,}")
         
-        # Step 6: 設定 TimeSeriesSplit (防止洩漏)
+        # Step 4: 設定 TimeSeriesSplit (防止洩漏)
         tscv = TimeSeriesSplit(n_splits=5, gap=240)
         logger.info("TimeSeriesSplit configured: n_splits=5, gap=240 (4 hours)")
         
-        # Step 7: 訓練 Long Oracle
+        # Step 5: 訓練 Long Oracle
         st.markdown("---")
         st.subheader("訓練 Long Oracle (Bottom Reversal Detector)")
         
@@ -221,7 +211,7 @@ class ModelTrainingTab:
             logger.info(f"Long Oracle OOS AUC: {auc_long:.4f}")
             st.success(f"Long Oracle 訓練完成 - AUC: {auc_long:.4f}")
         
-        # Step 8: 訓練 Short Oracle
+        # Step 6: 訓練 Short Oracle
         st.markdown("---")
         st.subheader("訓練 Short Oracle (Top Reversal Detector)")
         
@@ -264,7 +254,7 @@ class ModelTrainingTab:
             logger.info(f"Short Oracle OOS AUC: {auc_short:.4f}")
             st.success(f"Short Oracle 訓練完成 - AUC: {auc_short:.4f}")
         
-        # Step 9: 計算動態閾值的 Precision/Recall
+        # Step 7: 計算動態閾值的 Precision/Recall
         logger.info("Calculating metrics with dynamic threshold...")
         
         # 使用相對基礎率 2x 作為閾值
@@ -280,7 +270,7 @@ class ModelTrainingTab:
         precision_short = precision_score(y_short_test, y_short_pred_dynamic, zero_division=0)
         recall_short = recall_score(y_short_test, y_short_pred_dynamic, zero_division=0)
         
-        # Step 10: 保存模型
+        # Step 8: 保存模型
         st.markdown("---")
         st.subheader("保存模型")
         
@@ -298,9 +288,9 @@ class ModelTrainingTab:
         st.success(f"Long Oracle: {long_model_path.name}")
         st.success(f"Short Oracle: {short_model_path.name}")
         
-        # Step 11: 綜合報告
+        # Step 9: 綜合報告
         st.markdown("---")
-        st.subheader("雙向模型績效 (無洩漏版)")
+        st.subheader("雙向模型績效 (滾動視窗版)")
         
         col1, col2 = st.columns(2)
         
@@ -331,13 +321,9 @@ class ModelTrainingTab:
         # 保存報告
         report = {
             'timestamp': timestamp,
-            'architecture': 'broadcast',
+            'architecture': 'rolling_window',
             'calibration_method': 'isotonic_with_tscv',
-            'leak_prevention': {
-                'tscv_splits': 5,
-                'tscv_gap': 240,
-                'calibration_on': 'X_train_only'
-            },
+            'features': available_features,
             'total_samples': len(df_features),
             'train_samples': len(X_train),
             'test_samples': len(X_test),
