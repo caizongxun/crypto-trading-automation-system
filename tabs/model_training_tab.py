@@ -40,7 +40,7 @@ class ModelTrainingTab:
             self.render_bidirectional()
     
     def render_bidirectional(self):
-        """渲染雙向訓練介面"""
+        """渲柔雙向訓練介面"""
         st.markdown("""
         ### 🎯 雙向狩獵架構 - Bidirectional Hunting
         
@@ -64,26 +64,60 @@ class ModelTrainingTab:
         if st.button("🚀 訓練雙向模型 (Long + Short Oracles)", use_container_width=True, key="bidirectional_train_button"):
             self.train_bidirectional()
     
+    def load_1m_klines(self):
+        """載入 1m K 線 (支援多個路徑)"""
+        # 嘗試多個可能的路徑
+        possible_paths = [
+            Path("temp_data/BTC_1m.parquet"),
+            Path("klines_output/klines_BTCUSDT_1m.parquet"),
+            Path("data/klines_BTCUSDT_1m.parquet")
+        ]
+        
+        for path in possible_paths:
+            if path.exists():
+                logger.info(f"Found 1m data at: {path}")
+                try:
+                    df = pd.read_parquet(path)
+                    # 確保有 open_time 欄位
+                    if 'open_time' in df.columns:
+                        df.set_index('open_time', inplace=True)
+                    elif df.index.name != 'open_time':
+                        # 嘗試轉換 index 為 datetime
+                        if not isinstance(df.index, pd.DatetimeIndex):
+                            st.warning(f"{path} 沒有 open_time 欄位，嘗試使用 index")
+                    
+                    logger.info(f"Loaded {len(df)} records from {path}")
+                    return df, path
+                except Exception as e:
+                    logger.error(f"Error loading {path}: {str(e)}")
+                    continue
+        
+        return None, None
+    
     def train_bidirectional(self):
         """執行雙向訓練"""
         logger.info("Starting bidirectional training")
         
         # Step 1: 載入資料
         with st.spinner("📊 載入 1m K 線..."):
-            klines_dir = Path("klines_output")
-            klines_file = klines_dir / "klines_BTCUSDT_1m.parquet"
+            df_1m, data_path = self.load_1m_klines()
             
-            if not klines_file.exists():
-                st.error("請先在 '數據下載' Tab 中下載 BTCUSDT 1m K 線")
+            if df_1m is None:
+                st.error("""
+                找不到 1m K 線數據！
+                
+                請確認以下任一路徑存在數據：
+                1. `temp_data/BTC_1m.parquet`
+                2. `klines_output/klines_BTCUSDT_1m.parquet`
+                3. `data/klines_BTCUSDT_1m.parquet`
+                
+                解決方案：
+                - 到 "數據下載" Tab 下載 BTCUSDT 1m 數據
+                - 或在 "特徵工程" Tab 生成特徵後，再返回此處
+                """)
                 return
             
-            try:
-                df_1m = pd.read_parquet(klines_file)
-                df_1m.set_index('open_time', inplace=True)
-                st.success(f"✅ 載入 {len(df_1m):,} 筆 1m K 線")
-            except Exception as e:
-                st.error(f"載入失敗: {str(e)}")
-                return
+            st.success(f"✅ 載入 {len(df_1m):,} 筆 1m K 線 (from {data_path.name})")
         
         # Step 2: 生成雙向特徵與標籤
         with st.spinner("⚙️ 生成雙向特徵與標籤 (label_long + label_short)..."):
@@ -290,7 +324,7 @@ class ModelTrainingTab:
         logger.info(f"Bidirectional training completed: Long AUC={auc_long:.4f}, Short AUC={auc_short:.4f}")
     
     def render_unidirectional(self):
-        """渲染單向訓練介面 (原有功能)"""
+        """渲柔單向訓練介面 (原有功能)"""
         st.info("🚧 單向訓練功能保留，請先使用雙向訓練")
         st.markdown("""
         此功能保留來與舊版本相容。
