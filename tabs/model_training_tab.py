@@ -15,6 +15,7 @@ from utils.model_trainer import ModelTrainer
 from utils.micro_structure import MicroStructureEngineer
 from catboost import CatBoostClassifier
 from sklearn.calibration import CalibratedClassifierCV
+from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import classification_report, roc_auc_score, precision_score, recall_score
 
 logger = setup_logger('model_training_tab', 'logs/model_training_tab.log')
@@ -92,8 +93,10 @@ class ModelTrainingTab:
             self.train_bidirectional()
     
     def train_bidirectional(self):
-        """執行雙向訓練 - 廣播架構"""
-        logger.info("Starting bidirectional training with broadcast architecture")
+        """執行雙向訓練 - 廣播架構 (無洩漏版)"""
+        logger.info("="*80)
+        logger.info("BIDIRECTIONAL TRAINING - BROADCAST ARCHITECTURE (LEAK-FREE)")
+        logger.info("="*80)
         
         # Step 1: 載入 1m 數據
         with st.spinner("載入 1m K 線 (from HuggingFace)..."):
@@ -116,6 +119,7 @@ class ModelTrainingTab:
                 df_1m.set_index('open_time', inplace=True)
             
             st.success(f"載入 {len(df_1m):,} 筆 1m K 線")
+            logger.info(f"Loaded {len(df_1m):,} 1m bars")
         
         # Step 2: 計算 15m 微觀特徵
         with st.spinner("計算 15m 微觀軌跡特徵..."):
@@ -168,101 +172,115 @@ class ModelTrainingTab:
         y_short_train, y_short_test = y_short[:split_idx], y_short[split_idx:]
         
         st.info(f"訓練集: {len(X_train):,}, 測試集: {len(X_test):,}")
+        logger.info(f"Train: {len(X_train):,}, Test: {len(X_test):,}")
         
-        # Step 6: 動態計算 scale_pos_weight
-        long_pos_weight = (1 - y_long_train.mean()) / y_long_train.mean()
-        short_pos_weight = (1 - y_short_train.mean()) / y_short_train.mean()
-        
-        st.info(f"Long scale_pos_weight: {long_pos_weight:.2f}")
-        st.info(f"Short scale_pos_weight: {short_pos_weight:.2f}")
+        # Step 6: 設定 TimeSeriesSplit (防止洩漏)
+        tscv = TimeSeriesSplit(n_splits=5, gap=240)
+        logger.info("TimeSeriesSplit configured: n_splits=5, gap=240 (4 hours)")
         
         # Step 7: 訓練 Long Oracle
         st.markdown("---")
-        st.subheader("訓練 Long Oracle")
+        st.subheader("訓練 Long Oracle (Bottom Reversal Detector)")
         
-        with st.spinner("訓練 Long 模型中... (5-10 分鐘)"):
+        with st.spinner("訓練 Long 模型中... (10-15 分鐘)"):
+            # 動態計算 scale_pos_weight
+            pos_rate_long = y_long_train.mean()
+            scale_pos_weight_long = (1 - pos_rate_long) / pos_rate_long if pos_rate_long > 0 else 1.0
+            
+            logger.info(f"Long positive rate: {pos_rate_long*100:.2f}%")
+            logger.info(f"Long scale_pos_weight: {scale_pos_weight_long:.2f}")
+            st.info(f"Long scale_pos_weight: {scale_pos_weight_long:.2f}")
+            
             model_long = CatBoostClassifier(
-                iterations=500,
+                iterations=800,
                 learning_rate=0.05,
                 depth=6,
-                l2_leaf_reg=10,
+                l2_leaf_reg=5.0,
                 random_strength=0.5,
                 bagging_temperature=0.2,
-                loss_function='Logloss',
+                scale_pos_weight=float(scale_pos_weight_long),
                 eval_metric='AUC',
-                scale_pos_weight=float(long_pos_weight),
                 verbose=False,
                 random_seed=42,
                 task_type='CPU'
             )
             
-            model_long.fit(
-                X_train, y_long_train,
-                eval_set=(X_test, y_long_test),
-                early_stopping_rounds=50,
-                verbose=False
-            )
-            
-            # 機率校準 (使用 sigmoid 方法避免 clone 問題)
-            logger.info("Calibrating Long model probabilities (sigmoid method)...")
+            # 正確的校準: 在 X_train 上使用 CV
+            logger.info("Training and calibrating Long Oracle (on X_train only)...")
             model_long_calibrated = CalibratedClassifierCV(
                 estimator=model_long,
-                method='sigmoid',
-                cv=2
+                method='isotonic',
+                cv=tscv
             )
-            model_long_calibrated.fit(X_test, y_long_test)
+            model_long_calibrated.fit(X_train, y_long_train)
             
-            # 評估
-            y_long_pred = model_long_calibrated.predict(X_test)
+            # 在完全乾淨的測試集上評估
             y_long_proba = model_long_calibrated.predict_proba(X_test)[:, 1]
             auc_long = roc_auc_score(y_long_test, y_long_proba)
             
+            logger.info(f"Long Oracle OOS AUC: {auc_long:.4f}")
             st.success(f"Long Oracle 訓練完成 - AUC: {auc_long:.4f}")
         
         # Step 8: 訓練 Short Oracle
         st.markdown("---")
-        st.subheader("訓練 Short Oracle")
+        st.subheader("訓練 Short Oracle (Top Reversal Detector)")
         
-        with st.spinner("訓練 Short 模型中... (5-10 分鐘)"):
+        with st.spinner("訓練 Short 模型中... (10-15 分鐘)"):
+            # 動態計算 scale_pos_weight
+            pos_rate_short = y_short_train.mean()
+            scale_pos_weight_short = (1 - pos_rate_short) / pos_rate_short if pos_rate_short > 0 else 1.0
+            
+            logger.info(f"Short positive rate: {pos_rate_short*100:.2f}%")
+            logger.info(f"Short scale_pos_weight: {scale_pos_weight_short:.2f}")
+            st.info(f"Short scale_pos_weight: {scale_pos_weight_short:.2f}")
+            
             model_short = CatBoostClassifier(
-                iterations=500,
+                iterations=800,
                 learning_rate=0.05,
                 depth=6,
-                l2_leaf_reg=10,
+                l2_leaf_reg=5.0,
                 random_strength=0.5,
                 bagging_temperature=0.2,
-                loss_function='Logloss',
+                scale_pos_weight=float(scale_pos_weight_short),
                 eval_metric='AUC',
-                scale_pos_weight=float(short_pos_weight),
                 verbose=False,
                 random_seed=42,
                 task_type='CPU'
             )
             
-            model_short.fit(
-                X_train, y_short_train,
-                eval_set=(X_test, y_short_test),
-                early_stopping_rounds=50,
-                verbose=False
-            )
-            
-            # 機率校準 (使用 sigmoid 方法避免 clone 問題)
-            logger.info("Calibrating Short model probabilities (sigmoid method)...")
+            # 正確的校準: 在 X_train 上使用 CV
+            logger.info("Training and calibrating Short Oracle (on X_train only)...")
             model_short_calibrated = CalibratedClassifierCV(
                 estimator=model_short,
-                method='sigmoid',
-                cv=2
+                method='isotonic',
+                cv=tscv
             )
-            model_short_calibrated.fit(X_test, y_short_test)
+            model_short_calibrated.fit(X_train, y_short_train)
             
-            # 評估
-            y_short_pred = model_short_calibrated.predict(X_test)
+            # 在完全乾淨的測試集上評估
             y_short_proba = model_short_calibrated.predict_proba(X_test)[:, 1]
             auc_short = roc_auc_score(y_short_test, y_short_proba)
             
+            logger.info(f"Short Oracle OOS AUC: {auc_short:.4f}")
             st.success(f"Short Oracle 訓練完成 - AUC: {auc_short:.4f}")
         
-        # Step 9: 保存模型
+        # Step 9: 計算動態閾值的 Precision/Recall
+        logger.info("Calculating metrics with dynamic threshold...")
+        
+        # 使用相對基礎率 2x 作為閾值
+        threshold_long = pos_rate_long * 2
+        threshold_short = pos_rate_short * 2
+        
+        y_long_pred_dynamic = (y_long_proba >= threshold_long).astype(int)
+        y_short_pred_dynamic = (y_short_proba >= threshold_short).astype(int)
+        
+        precision_long = precision_score(y_long_test, y_long_pred_dynamic, zero_division=0)
+        recall_long = recall_score(y_long_test, y_long_pred_dynamic, zero_division=0)
+        
+        precision_short = precision_score(y_short_test, y_short_pred_dynamic, zero_division=0)
+        recall_short = recall_score(y_short_test, y_short_pred_dynamic, zero_division=0)
+        
+        # Step 10: 保存模型
         st.markdown("---")
         st.subheader("保存模型")
         
@@ -280,38 +298,32 @@ class ModelTrainingTab:
         st.success(f"Long Oracle: {long_model_path.name}")
         st.success(f"Short Oracle: {short_model_path.name}")
         
-        # Step 10: 綜合報告
+        # Step 11: 綜合報告
         st.markdown("---")
-        st.subheader("雙向模型績效 (廣播架構)")
+        st.subheader("雙向模型績效 (無洩漏版)")
         
         col1, col2 = st.columns(2)
         
         with col1:
             st.markdown("### Long Oracle")
-            st.metric("AUC", f"{auc_long:.4f}", delta="目標: 0.75+")
-            st.metric("標籤比例", f"{y_long_test.mean()*100:.2f}%")
-            
-            precision_long = precision_score(y_long_test, y_long_pred, zero_division=0)
-            recall_long = recall_score(y_long_test, y_long_pred, zero_division=0)
-            
+            st.metric("AUC", f"{auc_long:.4f}", delta="目標: 0.70+")
+            st.metric("標籤比例", f"{pos_rate_long*100:.2f}%")
+            st.metric("Threshold", f"{threshold_long:.4f}")
             st.metric("Precision", f"{precision_long:.4f}")
             st.metric("Recall", f"{recall_long:.4f}")
         
         with col2:
             st.markdown("### Short Oracle")
-            st.metric("AUC", f"{auc_short:.4f}", delta="目標: 0.75+")
-            st.metric("標籤比例", f"{y_short_test.mean()*100:.2f}%")
-            
-            precision_short = precision_score(y_short_test, y_short_pred, zero_division=0)
-            recall_short = recall_score(y_short_test, y_short_pred, zero_division=0)
-            
+            st.metric("AUC", f"{auc_short:.4f}", delta="目標: 0.70+")
+            st.metric("標籤比例", f"{pos_rate_short*100:.2f}%")
+            st.metric("Threshold", f"{threshold_short:.4f}")
             st.metric("Precision", f"{precision_short:.4f}")
             st.metric("Recall", f"{recall_short:.4f}")
         
         # 評估
-        if auc_long >= 0.75 and auc_short >= 0.75:
-            st.success("雙向模型達標,兩個 Oracle AUC 都超過 0.75")
-        elif auc_long >= 0.65 and auc_short >= 0.65:
+        if auc_long >= 0.70 and auc_short >= 0.70:
+            st.success("雙向模型達標,兩個 Oracle AUC 都超過 0.70")
+        elif auc_long >= 0.60 and auc_short >= 0.60:
             st.info("模型合格,但有提升空間")
         else:
             st.warning("模型效能不佳,建議檢查數據質量")
@@ -320,7 +332,12 @@ class ModelTrainingTab:
         report = {
             'timestamp': timestamp,
             'architecture': 'broadcast',
-            'calibration_method': 'sigmoid',
+            'calibration_method': 'isotonic_with_tscv',
+            'leak_prevention': {
+                'tscv_splits': 5,
+                'tscv_gap': 240,
+                'calibration_on': 'X_train_only'
+            },
             'total_samples': len(df_features),
             'train_samples': len(X_train),
             'test_samples': len(X_test),
@@ -328,16 +345,18 @@ class ModelTrainingTab:
                 'auc': float(auc_long),
                 'precision': float(precision_long),
                 'recall': float(recall_long),
-                'positive_rate': float(y_long_test.mean()),
-                'scale_pos_weight': float(long_pos_weight),
+                'positive_rate': float(pos_rate_long),
+                'scale_pos_weight': float(scale_pos_weight_long),
+                'threshold': float(threshold_long),
                 'model_path': str(long_model_path)
             },
             'short_oracle': {
                 'auc': float(auc_short),
                 'precision': float(precision_short),
                 'recall': float(recall_short),
-                'positive_rate': float(y_short_test.mean()),
-                'scale_pos_weight': float(short_pos_weight),
+                'positive_rate': float(pos_rate_short),
+                'scale_pos_weight': float(scale_pos_weight_short),
+                'threshold': float(threshold_short),
                 'model_path': str(short_model_path)
             }
         }
@@ -348,7 +367,9 @@ class ModelTrainingTab:
         
         st.info(f"訓練報告: {report_path.name}")
         
-        logger.info(f"Bidirectional training completed (broadcast): Long AUC={auc_long:.4f}, Short AUC={auc_short:.4f}")
+        logger.info("="*80)
+        logger.info(f"Training completed: Long AUC={auc_long:.4f}, Short AUC={auc_short:.4f}")
+        logger.info("="*80)
     
     def render_unidirectional(self):
         """單向訓練介面"""
