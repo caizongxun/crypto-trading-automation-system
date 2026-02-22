@@ -224,7 +224,11 @@ class DataFetcherTab:
             
             # Convert timestamp to datetime
             df['open_time'] = pd.to_datetime(df['timestamp'], unit='ms')
-            df['close_time'] = df['open_time'] + pd.Timedelta(self.get_timedelta(timeframe))
+            
+            # Calculate close_time based on timeframe
+            timedelta_str = self.get_timedelta(timeframe)
+            logger.info(f"Using timedelta: {timedelta_str}")
+            df['close_time'] = df['open_time'] + pd.Timedelta(timedelta_str)
             
             # Create proper column structure
             result_df = pd.DataFrame({
@@ -262,13 +266,16 @@ class DataFetcherTab:
             return None
     
     def get_timedelta(self, timeframe):
+        """Convert timeframe string to pandas Timedelta compatible string"""
         mapping = {
-            '1m': 'min',
+            '1m': '1min',
             '15m': '15min',
-            '1h': 'H',
-            '1d': 'D'
+            '1h': '1H',
+            '1d': '1D'
         }
-        return mapping.get(timeframe, 'min')
+        result = mapping.get(timeframe, '1min')
+        logger.info(f"get_timedelta: {timeframe} -> {result}")
+        return result
     
     def upload_to_huggingface(self, symbol, timeframe, data):
         logger.info(f"upload_to_huggingface called for {symbol} {timeframe}")
