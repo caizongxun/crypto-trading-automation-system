@@ -48,7 +48,8 @@ class BacktestingTab:
             
             selected_model = st.selectbox(
                 "選擇模型",
-                [f.name for f in model_files]
+                [f.name for f in model_files],
+                key="backtest_model_selectbox"  # 添加 unique key
             )
         
         with col2:
@@ -64,7 +65,8 @@ class BacktestingTab:
             
             selected_features = st.selectbox(
                 "選擇特徵檔案",
-                [f.name for f in feature_files]
+                [f.name for f in feature_files],
+                key="backtest_features_selectbox"  # 添加 unique key
             )
         
         st.markdown("---")
@@ -79,7 +81,8 @@ class BacktestingTab:
                 "初始資金 (USD)",
                 min_value=1000,
                 max_value=1000000,
-                value=10000
+                value=10000,
+                key="backtest_capital"  # 添加 unique key
             )
         
         with col2:
@@ -88,7 +91,8 @@ class BacktestingTab:
                 min_value=1.0,
                 max_value=5.0,
                 value=2.0,
-                step=0.5
+                step=0.5,
+                key="backtest_risk_reward"  # 添加 unique key
             )
         
         with col3:
@@ -97,7 +101,8 @@ class BacktestingTab:
                 min_value=0.1,
                 max_value=5.0,
                 value=1.0,
-                step=0.1
+                step=0.1,
+                key="backtest_stop_loss"  # 添加 unique key
             ) / 100
         
         with col4:
@@ -106,13 +111,14 @@ class BacktestingTab:
                 min_value=0.3,
                 max_value=0.8,
                 value=0.5,
-                step=0.05
+                step=0.05,
+                key="backtest_threshold"  # 添加 unique key
             )
         
         st.markdown("---")
         
         # 執行回測
-        if st.button("執行回測", use_container_width=True):
+        if st.button("執行回測", use_container_width=True, key="backtest_run_button"):
             self.run_backtest(
                 models_dir / selected_model,
                 features_dir / selected_features,
