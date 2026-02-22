@@ -118,7 +118,7 @@ class MicroStructureEngineer:
     @staticmethod
     def add_micro_labels(df_15m: pd.DataFrame, forward_bars: int = 16) -> pd.DataFrame:
         """
-        為 15m 的微觀特徵生成預測標籤
+        為 15m 的微觀特徵生成預測標籤 (僅做多)
         
         Args:
             df_15m: 15m K 線 + 微觀特徵
@@ -147,6 +147,114 @@ class MicroStructureEngineer:
         
         # 清理過渡欄位
         df.drop(columns=['future_high', 'return'], inplace=True)
+        
+        return df
+    
+    @staticmethod
+    def add_bidirectional_labels(df_15m: pd.DataFrame, 
+                                 lookahead_bars: int = 16,
+                                 tp_pct_long: float = 0.02,
+                                 sl_pct_long: float = 0.01,
+                                 tp_pct_short: float = 0.02,
+                                 sl_pct_short: float = 0.01) -> pd.DataFrame:
+        """
+        生成雙向標籤 (Long + Short Oracles)
+        
+        Args:
+            df_15m: 15m K 線 + 微觀特徵
+            lookahead_bars: 向前看幾根 15m K 線 (16 = 4 小時)
+            tp_pct_long: 做多停利百分比 (0.02 = 2%)
+            sl_pct_long: 做多停損百分比 (0.01 = 1%)
+            tp_pct_short: 做空停利百分比 (0.02 = 2%)
+            sl_pct_short: 做空停損百分比 (0.01 = 1%)
+        
+        Returns:
+            df_15m: 加入 label_long 和 label_short 欄位
+        """
+        logger.info("="*80)
+        logger.info("BIDIRECTIONAL LABEL GENERATION")
+        logger.info("="*80)
+        logger.info(f"Lookahead: {lookahead_bars} bars (4 hours)")
+        logger.info(f"Long  -> TP: +{tp_pct_long*100:.1f}%, SL: -{sl_pct_long*100:.1f}%")
+        logger.info(f"Short -> TP: -{tp_pct_short*100:.1f}%, SL: +{sl_pct_short*100:.1f}%")
+        
+        df = df_15m.copy()
+        n = len(df)
+        
+        # 初始化標籤
+        df['label_long'] = 0
+        df['label_short'] = 0
+        
+        logger.info("Processing labels (vectorized)...")
+        
+        # 向量化計算未來價格
+        for i in range(n - lookahead_bars):
+            entry_price = df.iloc[i]['close']
+            future_prices = df.iloc[i+1:i+1+lookahead_bars][['high', 'low']]
+            
+            if len(future_prices) < lookahead_bars:
+                break
+            
+            # --- 做多標籤 (Long) ---
+            tp_price_long = entry_price * (1 + tp_pct_long)
+            sl_price_long = entry_price * (1 - sl_pct_long)
+            
+            # 檢查是否先碰到停利
+            tp_hit_long = (future_prices['high'] >= tp_price_long)
+            sl_hit_long = (future_prices['low'] <= sl_price_long)
+            
+            if tp_hit_long.any():
+                tp_bar_long = tp_hit_long.idxmax()
+                if sl_hit_long.any():
+                    sl_bar_long = sl_hit_long.idxmax()
+                    # 先碰到停利
+                    if tp_bar_long <= sl_bar_long:
+                        df.iloc[i, df.columns.get_loc('label_long')] = 1
+                else:
+                    # 只碰到停利
+                    df.iloc[i, df.columns.get_loc('label_long')] = 1
+            
+            # --- 做空標籤 (Short) ---
+            tp_price_short = entry_price * (1 - tp_pct_short)
+            sl_price_short = entry_price * (1 + sl_pct_short)
+            
+            # 檢查是否先碰到停利
+            tp_hit_short = (future_prices['low'] <= tp_price_short)
+            sl_hit_short = (future_prices['high'] >= sl_price_short)
+            
+            if tp_hit_short.any():
+                tp_bar_short = tp_hit_short.idxmax()
+                if sl_hit_short.any():
+                    sl_bar_short = sl_hit_short.idxmax()
+                    # 先碰到停利
+                    if tp_bar_short <= sl_bar_short:
+                        df.iloc[i, df.columns.get_loc('label_short')] = 1
+                else:
+                    # 只碰到停利
+                    df.iloc[i, df.columns.get_loc('label_short')] = 1
+            
+            # 進度顯示
+            if (i + 1) % 10000 == 0:
+                logger.info(f"  Processed {i+1:,}/{n:,} samples ({(i+1)/n*100:.1f}%)")
+        
+        # 移除無法計算的最後 N 根
+        df = df.iloc[:-lookahead_bars]
+        
+        # 統計
+        long_rate = df['label_long'].mean()
+        short_rate = df['label_short'].mean()
+        both_rate = ((df['label_long'] == 1) & (df['label_short'] == 1)).mean()
+        neither_rate = ((df['label_long'] == 0) & (df['label_short'] == 0)).mean()
+        
+        logger.info("="*80)
+        logger.info("LABEL STATISTICS")
+        logger.info("="*80)
+        logger.info(f"Total samples: {len(df):,}")
+        logger.info(f"Long  positive: {df['label_long'].sum():,} ({long_rate*100:.2f}%)")
+        logger.info(f"Short positive: {df['label_short'].sum():,} ({short_rate*100:.2f}%)")
+        logger.info(f"Both  positive: {((df['label_long'] == 1) & (df['label_short'] == 1)).sum():,} ({both_rate*100:.2f}%)")
+        logger.info(f"Neither positive: {((df['label_long'] == 0) & (df['label_short'] == 0)).sum():,} ({neither_rate*100:.2f}%)")
+        logger.info("="*80)
         
         return df
     
