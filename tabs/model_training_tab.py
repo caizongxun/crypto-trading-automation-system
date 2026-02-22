@@ -42,54 +42,29 @@ class ModelTrainingTab:
         else:
             self.render_unidirectional()
     
-    def load_1m_data_from_hf(self, symbol: str = "BTCUSDT"):
-        """從 HuggingFace 載入 1m 數據"""
+    def load_klines(self, symbol: str, timeframe: str) -> pd.DataFrame:
+        """載入 HuggingFace 資料 - 與 feature_engineer.py 完全相同"""
         try:
+            repo_id = Config.HF_REPO_ID
             base = symbol.replace("USDT", "")
-            filename = f"{base}_1m.parquet"
-            folder = f"klines/{symbol}"
+            filename = f"{base}_{timeframe}.parquet"
+            path_in_repo = f"klines/{symbol}/{filename}"
             
-            logger.info(f"Downloading {filename} from HuggingFace")
+            logger.info(f"Loading {symbol} {timeframe} from HuggingFace")
             
-            file_path = hf_hub_download(
-                repo_id=Config.HF_REPO_ID,
-                filename=f"{folder}/{filename}",
+            local_path = hf_hub_download(
+                repo_id=repo_id,
+                filename=path_in_repo,
                 repo_type="dataset",
                 token=Config.HF_TOKEN
             )
-            
-            df = pd.read_parquet(file_path)
-            logger.info(f"Loaded {len(df)} records from HuggingFace")
-            
+            df = pd.read_parquet(local_path)
+            logger.info(f"Loaded {len(df)} records for {symbol} {timeframe}")
             return df
         
         except Exception as e:
-            logger.error(f"Error loading from HuggingFace: {str(e)}")
-            return None
-    
-    def load_1m_data_local(self, symbol: str = "BTCUSDT"):
-        """從本地載入 1m 數據"""
-        base = symbol.replace("USDT", "")
-        filename = f"{base}_1m.parquet"
-        
-        # 嘗試多個路徑
-        possible_paths = [
-            Path(f"temp_data/{filename}"),
-            Path(f"klines_output/klines_{symbol}_1m.parquet"),
-        ]
-        
-        for path in possible_paths:
-            if path.exists():
-                logger.info(f"Loading from local: {path}")
-                try:
-                    df = pd.read_parquet(path)
-                    logger.info(f"Loaded {len(df)} records from {path}")
-                    return df
-                except Exception as e:
-                    logger.error(f"Error loading {path}: {str(e)}")
-                    continue
-        
-        return None
+            logger.error(f"Failed to load {symbol} {timeframe}: {str(e)}")
+            return pd.DataFrame()
     
     def render_bidirectional(self):
         """雙向訓練介面"""
@@ -119,21 +94,18 @@ class ModelTrainingTab:
         """執行雙向訓練"""
         logger.info("Starting bidirectional training")
         
-        # Step 1: 載入 1m 數據
-        with st.spinner("載入 1m K 線..."):
-            # 先嘗試本地
-            df_1m = self.load_1m_data_local("BTCUSDT")
+        # Step 1: 載入 1m 數據 (與 feature_engineer.py 相同方式)
+        with st.spinner("載入 1m K 線 (from HuggingFace)..."):
+            df_1m = self.load_klines("BTCUSDT", "1m")
             
-            # 如果本地沒有，從 HuggingFace 下載
-            if df_1m is None:
-                st.info("本地沒有數據，嘗試從 HuggingFace 下載...")
-                df_1m = self.load_1m_data_from_hf("BTCUSDT")
-            
-            if df_1m is None or df_1m.empty:
+            if df_1m.empty:
                 st.error("""
-                無法載入 BTCUSDT 1m 數據。
+                無法從 HuggingFace 載入 BTCUSDT 1m 數據。
                 
-                請先到 'K棒資料抓取' Tab 下載 BTCUSDT 1m 數據。
+                請確認:
+                1. Config.HF_REPO_ID 設定正確
+                2. HuggingFace dataset 中存在 klines/BTCUSDT/BTC_1m.parquet
+                3. 先到 'K棒資料抓取' Tab 上傳數據到 HuggingFace
                 """)
                 return
             
