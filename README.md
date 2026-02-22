@@ -9,18 +9,27 @@ An automated cryptocurrency trading system that combines neural network learning
 - **Technical Indicators**: Integration with various technical analysis tools
 - **Automated Trading**: Execute trades based on model predictions
 - **GUI Interface**: User-friendly graphical interface for system control
+- **Comprehensive Logging**: Detailed logging system for debugging and monitoring
 
 ## Project Structure
 
 ```
 crypto-trading-automation-system/
 ├── main.py              # GUI main application
-├── data_fetcher.py      # K-line data fetching module
-├── models/              # Neural network models
-├── strategies/          # Trading strategies
-├── utils/               # Utility functions
 ├── config.py            # Configuration settings
-└── requirements.txt     # Python dependencies
+├── requirements.txt     # Python dependencies
+├── tabs/                # Modular tab components
+│   ├── __init__.py
+│   ├── data_fetcher_tab.py      # K-line data fetching module
+│   ├── model_training_tab.py    # Model training module
+│   ├── backtesting_tab.py       # Backtesting module
+│   └── auto_trading_tab.py      # Auto trading module
+├── utils/               # Utility functions
+│   ├── __init__.py
+│   └── logger.py        # Logging configuration
+├── models/              # Neural network models (future)
+├── strategies/          # Trading strategies (future)
+└── logs/                # Log files directory
 ```
 
 ## Installation
@@ -32,8 +41,8 @@ pip install -r requirements.txt
 ## Configuration
 
 Edit `config.py` to set up:
-- Binance API credentials
-- HuggingFace token
+- HuggingFace token (required for data storage)
+- Binance API credentials (optional, for live trading)
 - Trading parameters
 - Model settings
 
@@ -45,6 +54,24 @@ Run the GUI application:
 python main.py
 ```
 
+Or using Streamlit directly:
+
+```bash
+streamlit run main.py
+```
+
+## Logging
+
+The system includes comprehensive logging:
+- Console output: Real-time logs in terminal
+- File output: Detailed logs saved in `logs/` directory
+- Separate log files for each module:
+  - `logs/main.log` - Main application logs
+  - `logs/data_fetcher.log` - Data fetching operations
+  - `logs/model_training.log` - Model training logs
+  - `logs/backtesting.log` - Backtesting logs
+  - `logs/auto_trading.log` - Trading operations logs
+
 ## Data Storage
 
 Historical K-line data is stored in HuggingFace dataset:
@@ -54,7 +81,9 @@ Historical K-line data is stored in HuggingFace dataset:
 
 ## Supported Symbols
 
-38 cryptocurrency pairs including BTC, ETH, ADA, SOL, and more.
+38 cryptocurrency pairs including:
+- BTC, ETH, ADA, SOL, MATIC, AVAX, DOT, LINK
+- And 30 more major cryptocurrencies
 
 ## Supported Timeframes
 
@@ -62,6 +91,14 @@ Historical K-line data is stored in HuggingFace dataset:
 - 15m (15 minutes)
 - 1h (1 hour)
 - 1d (1 day)
+
+## Modular Architecture
+
+Each tab is implemented as a separate module for easy maintenance:
+- Independent functionality per module
+- Easy to extend and modify
+- Centralized logging system
+- Clean separation of concerns
 
 ## License
 
