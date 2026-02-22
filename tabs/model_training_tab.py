@@ -190,7 +190,7 @@ class ModelTrainingTab:
                 bagging_temperature=0.2,
                 loss_function='Logloss',
                 eval_metric='AUC',
-                scale_pos_weight=long_pos_weight,
+                scale_pos_weight=float(long_pos_weight),
                 verbose=False,
                 random_seed=42,
                 task_type='CPU'
@@ -203,12 +203,12 @@ class ModelTrainingTab:
                 verbose=False
             )
             
-            # 機率校準 (使用新版 API)
-            logger.info("Calibrating Long model probabilities...")
+            # 機率校準 (使用 sigmoid 方法避免 clone 問題)
+            logger.info("Calibrating Long model probabilities (sigmoid method)...")
             model_long_calibrated = CalibratedClassifierCV(
                 estimator=model_long,
-                method='isotonic',
-                ensemble=False
+                method='sigmoid',
+                cv=2
             )
             model_long_calibrated.fit(X_test, y_long_test)
             
@@ -233,7 +233,7 @@ class ModelTrainingTab:
                 bagging_temperature=0.2,
                 loss_function='Logloss',
                 eval_metric='AUC',
-                scale_pos_weight=short_pos_weight,
+                scale_pos_weight=float(short_pos_weight),
                 verbose=False,
                 random_seed=42,
                 task_type='CPU'
@@ -246,12 +246,12 @@ class ModelTrainingTab:
                 verbose=False
             )
             
-            # 機率校準 (使用新版 API)
-            logger.info("Calibrating Short model probabilities...")
+            # 機率校準 (使用 sigmoid 方法避免 clone 問題)
+            logger.info("Calibrating Short model probabilities (sigmoid method)...")
             model_short_calibrated = CalibratedClassifierCV(
                 estimator=model_short,
-                method='isotonic',
-                ensemble=False
+                method='sigmoid',
+                cv=2
             )
             model_short_calibrated.fit(X_test, y_short_test)
             
@@ -310,7 +310,7 @@ class ModelTrainingTab:
         
         # 評估
         if auc_long >= 0.75 and auc_short >= 0.75:
-            st.success("雙向模型達標！兩個 Oracle AUC 都超過 0.75")
+            st.success("雙向模型達標,兩個 Oracle AUC 都超過 0.75")
         elif auc_long >= 0.65 and auc_short >= 0.65:
             st.info("模型合格,但有提升空間")
         else:
@@ -320,6 +320,7 @@ class ModelTrainingTab:
         report = {
             'timestamp': timestamp,
             'architecture': 'broadcast',
+            'calibration_method': 'sigmoid',
             'total_samples': len(df_features),
             'train_samples': len(X_train),
             'test_samples': len(X_test),
