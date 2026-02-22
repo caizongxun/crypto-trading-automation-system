@@ -16,20 +16,27 @@ class FeatureEngineer:
         logger.info("Initialized FeatureEngineer with micro-structure support")
         self.micro_engineer = MicroStructureEngineer()
     
-    def create_features_from_1m(self, df_1m: pd.DataFrame, use_micro_structure: bool = True) -> pd.DataFrame:
+    def create_features_from_1m(self, df_1m: pd.DataFrame, 
+                               use_micro_structure: bool = True,
+                               label_type: str = 'long') -> pd.DataFrame:
         """
         從 1m K 線生成完整特徵矩陣
         
         Args:
             df_1m: 1m K 線資料
             use_micro_structure: 是否使用微觀結構特徵
+            label_type: 標籤類型
+                - 'long': 做多標籤 (target)
+                - 'short': 做空標籤 (target)
+                - 'both': 雙向標籤 (label_long, label_short)
         
         Returns:
-            features_df: 完整特徵矩陣 (15m 基礎 + 微觀特徵 + 宏觀指標)
+            features_df: 完整特徵矩陣 (15m 基礎 + 微觀特徵 + 宏觀指標 + 標籤)
         """
         logger.info("="*80)
         logger.info("FEATURE ENGINEERING PIPELINE")
         logger.info(f"Use micro-structure: {use_micro_structure}")
+        logger.info(f"Label type: {label_type}")
         logger.info("="*80)
         
         # 步驟 1: 微觀軌跡壓縮 (1m -> 15m)
@@ -55,10 +62,36 @@ class FeatureEngineer:
         df_15m = self.add_higher_timeframe_features(df_15m, df_1m)
         
         # 步驟 4: 生成標籤
-        logger.info("Step 4: Generating labels")
+        logger.info(f"Step 4: Generating labels (type={label_type})")
         if use_micro_structure:
-            # 微觀模式: 預測未來 4 小時
-            df_15m = self.micro_engineer.add_micro_labels(df_15m, forward_bars=16)
+            if label_type == 'both':
+                # 雙向標籤
+                df_15m = self.micro_engineer.add_bidirectional_labels(
+                    df_15m, 
+                    lookahead_bars=16,
+                    tp_pct_long=0.02,
+                    sl_pct_long=0.01,
+                    tp_pct_short=0.02,
+                    sl_pct_short=0.01
+                )
+            elif label_type == 'long':
+                # 做多標籤 (向下相容)
+                df_15m = self.micro_engineer.add_micro_labels(df_15m, forward_bars=16)
+                df_15m.rename(columns={'target': 'label_long'}, inplace=True)
+            elif label_type == 'short':
+                # 做空標籤
+                df_15m = self.micro_engineer.add_bidirectional_labels(
+                    df_15m, 
+                    lookahead_bars=16,
+                    tp_pct_long=0.02,
+                    sl_pct_long=0.01,
+                    tp_pct_short=0.02,
+                    sl_pct_short=0.01
+                )
+                df_15m.drop(columns=['label_long'], inplace=True)
+                df_15m.rename(columns={'label_short': 'target'}, inplace=True)
+            else:
+                raise ValueError(f"Invalid label_type: {label_type}. Must be 'long', 'short', or 'both'")
         else:
             # 傳統模式: 預測下一根 15m
             df_15m = self.add_traditional_labels(df_15m)
