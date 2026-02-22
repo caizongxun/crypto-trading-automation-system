@@ -14,10 +14,10 @@ from utils.logger import setup_logger
 logger = setup_logger('model_trainer', 'logs/model_trainer.log')
 
 class ModelTrainer:
-    """模型訓練器 - 嚴格時間序列切分與防過擬合"""
+    """模型訓練器 - 支援 Feature Engineering 2.0"""
     
     def __init__(self):
-        logger.info("Initialized ModelTrainer")
+        logger.info("Initialized ModelTrainer with 2.0 feature support")
         self.feature_cols = [
             # 1m 微觀特徵
             '1m_bull_sweep', '1m_bear_sweep', '1m_bull_bos', '1m_bear_bos', '1m_dist_to_poc',
@@ -25,13 +25,20 @@ class ModelTrainer:
             '15m_z_score', '15m_bb_width_pct',
             # 1h/1d 宏觀特徵
             '1h_z_score', '1d_atr_pct',
-            # 時間特徵 (策略 1)
+            # 時間特徵
             'hour', 'day_of_week', 'session_asia', 'session_europe', 'session_us',
-            'session_overlap', 'is_weekend', 'hour_sin', 'hour_cos', 'dow_sin', 'dow_cos'
+            'session_overlap', 'is_weekend', 'hour_sin', 'hour_cos', 'dow_sin', 'dow_cos',
+            # === Feature Engineering 2.0 ===
+            # 殺手鑇 1: 相對成交量
+            'rvol', 'sweep_with_high_rvol',
+            # 殺手鑇 2: 跨週期波動率壓縮比
+            'volatility_squeeze_ratio',
+            # 殺手鑇 3: 背離特徵
+            'is_bullish_divergence', 'is_macd_bullish_divergence'
         ]
     
     def time_series_split(self, df: pd.DataFrame, train_ratio: float = 0.8) -> tuple:
-        """嚴格時間序列切分 - 絕不打亂"""
+        """嚴格時間序列切分"""
         logger.info(f"Performing time series split with ratio {train_ratio}")
         
         n = len(df)
@@ -46,7 +53,7 @@ class ModelTrainer:
         return train_df, test_df
     
     def calculate_scale_pos_weight(self, y: pd.Series) -> float:
-        """計算樣本權重 - 處理不平衡"""
+        """計算樣本權重"""
         neg_count = (y == 0).sum()
         pos_count = (y == 1).sum()
         scale_pos_weight = neg_count / pos_count
@@ -78,10 +85,9 @@ class ModelTrainer:
     
     def find_optimal_threshold(self, y_true: np.ndarray, y_pred_proba: np.ndarray, 
                               target_recall: float = 0.55) -> dict:
-        """策略 3: 決策閉值最佳化"""
+        """決策閉值最佳化"""
         logger.info(f"Finding optimal threshold with target recall >= {target_recall}")
         
-        # 計算不同閉值下的指標
         thresholds = np.arange(0.3, 0.8, 0.05)
         results = []
         
@@ -90,8 +96,6 @@ class ModelTrainer:
             
             recall = recall_score(y_true, y_pred)
             precision = precision_score(y_true, y_pred)
-            
-            # F1 score
             f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
             
             results.append({
@@ -103,14 +107,12 @@ class ModelTrainer:
             
             logger.info(f"Threshold {threshold:.2f}: Recall={recall:.4f}, Precision={precision:.4f}, F1={f1:.4f}")
         
-        # 找到滿足 recall 要求且 precision 最高的閉值
         valid_results = [r for r in results if r['recall'] >= target_recall]
         
         if valid_results:
             optimal = max(valid_results, key=lambda x: x['precision'])
             logger.info(f"Optimal threshold: {optimal['threshold']:.2f} (Recall={optimal['recall']:.4f}, Precision={optimal['precision']:.4f})")
         else:
-            # 如果沒有滿足 recall 的，選擇 F1 最高的
             optimal = max(results, key=lambda x: x['f1'])
             logger.warning(f"No threshold meets target recall, using best F1: {optimal['threshold']:.2f}")
         
@@ -121,7 +123,7 @@ class ModelTrainer:
     
     def train(self, features_df: pd.DataFrame, params: dict) -> dict:
         """完整訓練流程"""
-        logger.info("Starting training pipeline")
+        logger.info("Starting training pipeline with 2.0 features")
         logger.info(f"Input shape: {features_df.shape}")
         
         try:
@@ -135,19 +137,19 @@ class ModelTrainer:
             # 3. 計算樣本權重
             scale_pos_weight = self.calculate_scale_pos_weight(y_train)
             
-            # 4. 設定 LightGBM 參數 (策略 2: 進階超參數)
+            # 4. LightGBM 參數
             lgb_params = {
                 'objective': 'binary',
                 'metric': 'auc',
                 'boosting_type': 'gbdt',
-                'learning_rate': params.get('learning_rate', 0.01),  # 降低學習率
-                'max_depth': params.get('max_depth', 6),  # 增加深度
+                'learning_rate': params.get('learning_rate', 0.01),
+                'max_depth': params.get('max_depth', 6),
                 'num_leaves': params.get('num_leaves', 31),
                 'min_child_samples': params.get('min_child_samples', 50),
                 'subsample': 0.8,
                 'colsample_bytree': 0.8,
-                'reg_alpha': 0.1,  # L1 正則化
-                'reg_lambda': 0.1,  # L2 正則化
+                'reg_alpha': 0.1,
+                'reg_lambda': 0.1,
                 'scale_pos_weight': scale_pos_weight,
                 'verbose': -1,
                 'random_state': 42
@@ -164,7 +166,7 @@ class ModelTrainer:
             model = lgb.train(
                 lgb_params,
                 train_data,
-                num_boost_round=params.get('n_estimators', 1000),  # 增加樹數量
+                num_boost_round=params.get('n_estimators', 1000),
                 valid_sets=[train_data, test_data],
                 valid_names=['train', 'test'],
                 callbacks=[
@@ -179,7 +181,7 @@ class ModelTrainer:
             y_train_pred_proba = model.predict(X_train, num_iteration=model.best_iteration)
             y_test_pred_proba = model.predict(X_test, num_iteration=model.best_iteration)
             
-            # 7. 計算指標 (預設閉值 0.5)
+            # 7. 計算指標
             train_auc = roc_auc_score(y_train, y_train_pred_proba)
             test_auc = roc_auc_score(y_test, y_test_pred_proba)
             
@@ -187,22 +189,19 @@ class ModelTrainer:
             test_recall = recall_score(y_test, y_test_pred)
             test_precision = precision_score(y_test, y_test_pred)
             
-            # 8. 閉值最佳化 (策略 3)
+            # 8. 閉值最佳化
             threshold_results = self.find_optimal_threshold(y_test, y_test_pred_proba, target_recall=0.55)
             optimal_threshold = threshold_results['optimal']['threshold']
             
-            # 使用最佳閉值重新計算
             y_test_pred_optimal = (y_test_pred_proba >= optimal_threshold).astype(int)
             test_recall_optimal = recall_score(y_test, y_test_pred_optimal)
             test_precision_optimal = precision_score(y_test, y_test_pred_optimal)
             
-            # 混淆矩陣 (最佳閉值)
             cm = confusion_matrix(y_test, y_test_pred_optimal)
             tn, fp, fn, tp = cm.ravel()
             
             logger.info(f"Train AUC: {train_auc:.4f}")
             logger.info(f"Test AUC: {test_auc:.4f}")
-            logger.info(f"Test Recall (0.5): {test_recall:.4f}, Precision (0.5): {test_precision:.4f}")
             logger.info(f"Test Recall (optimal): {test_recall_optimal:.4f}, Precision (optimal): {test_precision_optimal:.4f}")
             logger.info(f"Optimal threshold: {optimal_threshold:.2f}")
             
@@ -221,7 +220,7 @@ class ModelTrainer:
             model_dir = Path("models_output")
             model_dir.mkdir(exist_ok=True)
             
-            model_path = model_dir / f"lgb_model_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            model_path = model_dir / f"lgb_model_v2_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.txt"
             model.save_model(str(model_path))
             logger.info(f"Model saved to {model_path}")
             
