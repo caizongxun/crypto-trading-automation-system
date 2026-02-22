@@ -54,11 +54,48 @@ class MultiTimeframeFeatureEngineer:
         
         return data
     
+    def extract_time_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """策略 1: 提取時間特徵 (交易時段/流動性)"""
+        logger.info("Extracting time-based features")
+        
+        df = df.copy()
+        df['open_time'] = pd.to_datetime(df['open_time'])
+        
+        # 1. 小時 (0-23)
+        df['hour'] = df['open_time'].dt.hour
+        
+        # 2. 星期 (0=星期一, 6=星期日)
+        df['day_of_week'] = df['open_time'].dt.dayofweek
+        
+        # 3. 交易時段 (Session)
+        # 亞洲盤: 0-7 (UTC)
+        # 歐洲盤: 7-15 (UTC)
+        # 美國盤: 13-21 (UTC) - 最高流動性
+        df['session_asia'] = ((df['hour'] >= 0) & (df['hour'] < 7)).astype(int)
+        df['session_europe'] = ((df['hour'] >= 7) & (df['hour'] < 13)).astype(int)
+        df['session_us'] = ((df['hour'] >= 13) & (df['hour'] < 21)).astype(int)
+        df['session_overlap'] = ((df['hour'] >= 13) & (df['hour'] < 15)).astype(int)  # 歐美重疊
+        
+        # 4. 週末標記 (流動性低)
+        df['is_weekend'] = (df['day_of_week'] >= 5).astype(int)
+        
+        # 5. 循環編碼 (Cyclical Encoding) - 保持連續性
+        df['hour_sin'] = np.sin(2 * np.pi * df['hour'] / 24)
+        df['hour_cos'] = np.cos(2 * np.pi * df['hour'] / 24)
+        df['dow_sin'] = np.sin(2 * np.pi * df['day_of_week'] / 7)
+        df['dow_cos'] = np.cos(2 * np.pi * df['day_of_week'] / 7)
+        
+        logger.info("Time features extracted: hour, day_of_week, sessions, cyclical")
+        return df
+    
     def extract_microstructure_features(self, df_1m: pd.DataFrame) -> pd.DataFrame:
         """第一層: 1分鐘微觀結構特徵"""
         logger.info("Extracting 1m microstructure features")
         
         df = df_1m.copy()
+        
+        # 先提取時間特徵
+        df = self.extract_time_features(df)
         
         # 1. 流動性獵取 (Liquidity Sweeps)
         df['pivot_high'] = df['high'].rolling(5, center=True).max() == df['high']
