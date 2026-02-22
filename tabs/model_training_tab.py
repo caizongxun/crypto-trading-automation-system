@@ -203,11 +203,12 @@ class ModelTrainingTab:
                 verbose=False
             )
             
-            # 機率校準
+            # 機率校準 (使用新版 API)
+            logger.info("Calibrating Long model probabilities...")
             model_long_calibrated = CalibratedClassifierCV(
-                model_long,
+                estimator=model_long,
                 method='isotonic',
-                cv='prefit'
+                ensemble=False
             )
             model_long_calibrated.fit(X_test, y_long_test)
             
@@ -245,11 +246,12 @@ class ModelTrainingTab:
                 verbose=False
             )
             
-            # 機率校準
+            # 機率校準 (使用新版 API)
+            logger.info("Calibrating Short model probabilities...")
             model_short_calibrated = CalibratedClassifierCV(
-                model_short,
+                estimator=model_short,
                 method='isotonic',
-                cv='prefit'
+                ensemble=False
             )
             model_short_calibrated.fit(X_test, y_short_test)
             
@@ -310,9 +312,9 @@ class ModelTrainingTab:
         if auc_long >= 0.75 and auc_short >= 0.75:
             st.success("雙向模型達標！兩個 Oracle AUC 都超過 0.75")
         elif auc_long >= 0.65 and auc_short >= 0.65:
-            st.info("模型合格，但有提升空間")
+            st.info("模型合格,但有提升空間")
         else:
-            st.warning("模型效能不佳，建議檢查數據質量")
+            st.warning("模型效能不佳,建議檢查數據質量")
         
         # 保存報告
         report = {
@@ -349,7 +351,7 @@ class ModelTrainingTab:
     
     def render_unidirectional(self):
         """單向訓練介面"""
-        st.info("單向訓練功能保留，建議使用雙向訓練")
+        st.info("單向訓練功能保留,建議使用雙向訓練")
         st.markdown("""
         **建議使用雙向訓練**:
         - 更高交易頻率
