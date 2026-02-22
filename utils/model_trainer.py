@@ -178,13 +178,16 @@ class ModelTrainer:
         
         scale_pos_weight = self.calculate_scale_pos_weight(y_train)
         
+        # CatBoost 使用 class_weights 而不是 scale_pos_weight (相容 sklearn)
+        class_weights = {0: 1.0, 1: float(scale_pos_weight)}
+        
         # CatBoost 基礎模型
         base_model = CatBoostClassifier(
             iterations=params.get('iterations', 1000),
             learning_rate=params.get('learning_rate', 0.03),
             depth=params.get('depth', 5),
             l2_leaf_reg=params.get('l2_leaf_reg', 5.0),
-            scale_pos_weight=scale_pos_weight,
+            class_weights=class_weights,  # 改用 class_weights
             eval_metric='AUC',
             random_seed=42,
             verbose=False,
@@ -197,7 +200,7 @@ class ModelTrainer:
         logger.info(f"  learning_rate: {params.get('learning_rate', 0.03)}")
         logger.info(f"  depth: {params.get('depth', 5)}")
         logger.info(f"  l2_leaf_reg: {params.get('l2_leaf_reg', 5.0)}")
-        logger.info(f"  scale_pos_weight: {scale_pos_weight:.4f}")
+        logger.info(f"  class_weights: {class_weights}")
         
         # Isotonic 機率校準
         lookahead_bars = params.get('lookahead_bars', 16)
