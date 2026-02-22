@@ -6,6 +6,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent))
 
 from tabs.data_fetcher_tab import DataFetcherTab
+from tabs.feature_engineering_tab import FeatureEngineeringTab
 from tabs.model_training_tab import ModelTrainingTab
 from tabs.backtesting_tab import BacktestingTab
 from tabs.auto_trading_tab import AutoTradingTab
@@ -26,8 +27,9 @@ def main():
     st.title("加密貨幣自動交易系統")
     
     # Create tabs
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "K棒資料抓取",
+        "特徵工程",
         "模型訓練",
         "策略回測",
         "自動交易"
@@ -38,14 +40,18 @@ def main():
         DataFetcherTab().render()
     
     with tab2:
+        logger.info("Loading Feature Engineering Tab")
+        FeatureEngineeringTab().render()
+    
+    with tab3:
         logger.info("Loading Model Training Tab")
         ModelTrainingTab().render()
     
-    with tab3:
+    with tab4:
         logger.info("Loading Backtesting Tab")
         BacktestingTab().render()
     
-    with tab4:
+    with tab5:
         logger.info("Loading Auto Trading Tab")
         AutoTradingTab().render()
 
