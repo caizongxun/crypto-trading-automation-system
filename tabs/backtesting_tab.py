@@ -6,76 +6,109 @@ import sys
 import json
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from huggingface_hub import hf_hub_download
 
 sys.path.append(str(Path(__file__).parent.parent))
+from config import Config
 from utils.logger import setup_logger
-from utils.backtester import EventDrivenBacktester
+from utils.agent_backtester import BidirectionalAgentBacktester
+from utils.feature_engineering import FeatureEngineer
 
 logger = setup_logger('backtesting_tab', 'logs/backtesting_tab.log')
 
 class BacktestingTab:
     def __init__(self):
         logger.info("Initializing BacktestingTab")
+        self.feature_engineer = FeatureEngineer()
     
     def render(self):
         logger.info("Rendering Backtesting Tab")
         st.header("策略回測")
         
+        # 回測模式選擇
+        backtest_mode = st.radio(
+            "選擇回測模式",
+            ['bidirectional', 'unidirectional'],
+            format_func=lambda x: '雙向智能體 (Long + Short)' if x == 'bidirectional' else '單向 (Long Only)',
+            horizontal=True,
+            key="backtest_mode_selector"
+        )
+        
+        if backtest_mode == 'bidirectional':
+            self.render_bidirectional()
+        else:
+            self.render_unidirectional()
+    
+    def load_klines(self, symbol: str, timeframe: str) -> pd.DataFrame:
+        """從 HuggingFace 載入 K 線數據"""
+        try:
+            repo_id = Config.HF_REPO_ID
+            base = symbol.replace("USDT", "")
+            filename = f"{base}_{timeframe}.parquet"
+            path_in_repo = f"klines/{symbol}/{filename}"
+            
+            logger.info(f"Loading {symbol} {timeframe} from HuggingFace")
+            
+            local_path = hf_hub_download(
+                repo_id=repo_id,
+                filename=path_in_repo,
+                repo_type="dataset",
+                token=Config.HF_TOKEN
+            )
+            df = pd.read_parquet(local_path)
+            logger.info(f"Loaded {len(df):,} records for {symbol} {timeframe}")
+            return df
+        
+        except Exception as e:
+            logger.error(f"Failed to load {symbol} {timeframe}: {str(e)}")
+            return pd.DataFrame()
+    
+    def render_bidirectional(self):
+        """雙向智能體回測介面"""
         st.markdown("""
-        ### 事件驅動回測引擎 - 三層物理濾網優化
+        ### 雙向智能體回測 - 事件驅動狀態機
         
-        **三大防線**:
-        - 🛡️ **T+1 執行**: 訊號在 t 時刻產生，在 t+1 開盤價執行
-        - 🛡️ **悲觀假設**: 同時觸及 SL/TP 時，假設先觸及 SL
-        - 🛡️ **非對稱手續費**: 進場 Maker 0.01%, 停損 Taker 0.06%
-        
-        **三層濾網**:
-        - ✅ **Layer 1**: 拉高機率閉值 (0.65+) - 只做高品質訊號
-        - ✅ **Layer 2**: 黃金時段濾網 (9-13, 18-21 UTC) - 迴避洗盤時段
-        - ✅ **Layer 3**: Maker 限價進場 (0.01%) - 減少摩擦成本 75%
+        **核心特性**:
+        - 事件驅動: 逐根 1m K 線處理
+        - 狀態機: 5 種狀態 (IDLE, HUNTING_LONG, HUNTING_SHORT, LONG_POS, SHORT_POS)
+        - 悉觀成交: 限價單必須嚴格穿越
+        - 薫丁格處理: 同時觸及 TP+SL 則 SL 優先
+        - 不對稱成本: Maker 0.01%, Taker 0.04% + 滑價 0.02%
+        - 訂單過期: 15 分鐘未成交自動取消
         """)
         
         st.markdown("---")
         
-        # 選擇模型與特徵
+        # 選擇模型
         col1, col2 = st.columns(2)
         
+        models_dir = Path("models_output")
+        if not models_dir.exists():
+            st.warning("請先訓練模型")
+            return
+        
         with col1:
-            models_dir = Path("models_output")
-            if not models_dir.exists():
-                st.warning("請先訓練模型")
+            long_models = list(models_dir.glob("catboost_long_*.pkl"))
+            if not long_models:
+                st.warning("沒有找到 Long Oracle 模型")
                 return
             
-            # 支援 LightGBM (.txt) 和 CatBoost (.pkl)
-            lgb_files = list(models_dir.glob("lgb_model*.txt"))
-            cb_files = list(models_dir.glob("catboost_model*.pkl"))
-            model_files = lgb_files + cb_files
-            
-            if not model_files:
-                st.warning("沒有找到模型檔案")
-                return
-            
-            selected_model = st.selectbox(
-                "選擇模型",
-                [f.name for f in model_files],
-                key="backtest_model_selectbox"
+            selected_long_model = st.selectbox(
+                "Long Oracle 模型",
+                [f.name for f in sorted(long_models, key=lambda x: x.stat().st_mtime, reverse=True)],
+                key="backtest_long_model"
             )
         
         with col2:
-            features_dir = Path("features_output")
-            if not features_dir.exists():
-                st.warning("請先生成特徵")
+            short_models = list(models_dir.glob("catboost_short_*.pkl"))
+            if not short_models:
+                st.warning("沒有找到 Short Oracle 模型")
                 return
             
-            feature_files = list(features_dir.glob("features_*.parquet"))
-            if not feature_files:
-                st.warning("沒有特徵檔案")
-                return
-            
-            selected_features = st.selectbox(
-                "選擇特徵檔案",
-                [f.name for f in feature_files],
-                key="backtest_features_selectbox"
+            selected_short_model = st.selectbox(
+                "Short Oracle 模型",
+                [f.name for f in sorted(short_models, key=lambda x: x.stat().st_mtime, reverse=True)],
+                key="backtest_short_model"
             )
         
         st.markdown("---")
@@ -91,339 +124,347 @@ class BacktestingTab:
                 min_value=1000,
                 max_value=1000000,
                 value=10000,
-                key="backtest_capital"
+                key="backtest_capital_bid"
             )
         
         with col2:
-            risk_reward = st.number_input(
-                "盈虧比 (TP:SL)",
-                min_value=1.0,
-                max_value=5.0,
-                value=2.0,
-                step=0.5,
-                key="backtest_risk_reward"
-            )
+            position_size_pct = st.slider(
+                "仓位比例 (%)",
+                min_value=10,
+                max_value=100,
+                value=95,
+                step=5,
+                key="backtest_position_size"
+            ) / 100
         
         with col3:
-            stop_loss_pct = st.number_input(
-                "停損百分比 (%)",
+            tp_pct = st.number_input(
+                "停利 (%)",
+                min_value=0.5,
+                max_value=5.0,
+                value=2.0,
+                step=0.1,
+                key="backtest_tp"
+            ) / 100
+        
+        with col4:
+            sl_pct = st.number_input(
+                "停損 (%)",
                 min_value=0.1,
                 max_value=5.0,
                 value=1.0,
                 step=0.1,
-                key="backtest_stop_loss"
+                key="backtest_sl"
             ) / 100
         
-        with col4:
-            probability_threshold = st.slider(
-                "機率閉值",
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            prob_threshold_long = st.slider(
+                "Long 機率閾值",
                 min_value=0.50,
                 max_value=0.80,
                 value=0.65,
                 step=0.05,
-                key="backtest_prob_threshold",
-                help="Layer 1: 只做機率大於此值的訊號 (0.65 = 65%)"
-            )
-        
-        st.markdown("---")
-        
-        # 進階選項 - 三層濾網
-        st.subheader("三層濾網設定")
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.markdown("🟢 **Layer 1: 機率閉值**")
-            st.metric("當前閉值", f"{probability_threshold*100:.0f}%")
-            st.caption("過濾低品質訊號")
-        
-        with col2:
-            st.markdown("🟡 **Layer 2: 時間濾網**")
-            use_time_filter = st.checkbox(
-                "啟用黃金時段",
-                value=True,
-                key="backtest_time_filter",
-                help="只允許在 09:00-13:59, 18:00-21:59 (UTC) 進場"
-            )
-            if use_time_filter:
-                st.caption("✅ 9-13, 18-21 UTC")
-            else:
-                st.caption("❌ 全天交易")
-        
-        with col3:
-            st.markdown("🔵 **Layer 3: Maker 手續費**")
-            st.info("預設啟用 (0.01%)")
-            st.caption("減少摩擦成本 75%")
-        
-        st.markdown("---")
-        
-        # 預期效果
-        st.subheader("🎯 預期效果")
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.metric(
-                "交易數",
-                "100-150",
-                delta="-50% vs 基準",
-                help="過濾低品質訊號後"
+                key="backtest_prob_long"
             )
         
         with col2:
-            st.metric(
-                "勝率",
-                "40%+",
-                delta="+6% vs 基準",
-                help="只做高機率訊號"
+            prob_threshold_short = st.slider(
+                "Short 機率閾值",
+                min_value=0.50,
+                max_value=0.80,
+                value=0.65,
+                step=0.05,
+                key="backtest_prob_short"
             )
         
         with col3:
-            st.metric(
-                "Profit Factor",
-                "1.10+",
-                delta="+0.22 vs 基準",
-                help="總獲利 / 總虧損"
+            hunting_expire_bars = st.number_input(
+                "訂單過期 (分鐘)",
+                min_value=5,
+                max_value=60,
+                value=15,
+                step=5,
+                key="backtest_expire"
             )
         
         st.markdown("---")
         
-        # 執行回測
-        if st.button("🚀 執行三層濾網回測", use_container_width=True, key="backtest_run_button"):
-            self.run_backtest(
-                models_dir / selected_model,
-                features_dir / selected_features,
-                initial_capital,
-                risk_reward,
-                stop_loss_pct,
-                probability_threshold,
-                use_time_filter
-            )
-    
-    def run_backtest(self, model_path: Path, features_path: Path,
-                    initial_capital: float, risk_reward: float,
-                    stop_loss_pct: float, probability_threshold: float,
-                    use_time_filter: bool):
-        logger.info(f"Starting 3-layer filtered backtest: model={model_path}, features={features_path}")
+        # 交易時段設定
+        st.subheader("交易時段")
         
-        with st.spinner("載入資料..."):
-            try:
-                features_df = pd.read_parquet(features_path)
-                st.success(f"載入 {len(features_df):,} 筆特徵")
-            except Exception as e:
-                st.error(f"載入特徵失敗: {str(e)}")
-                return
-        
-        # 切分測試集
-        split_idx = int(len(features_df) * 0.8)
-        test_df = features_df.iloc[split_idx:].copy()
-        
-        st.info(f"使用 OOS 測試集: {len(test_df):,} 筆 (後 20%)")
-        
-        # 初始化回測引擎
-        backtester = EventDrivenBacktester(
-            initial_capital=initial_capital,
-            risk_reward_ratio=risk_reward,
-            stop_loss_pct=stop_loss_pct,
-            maker_fee=0.0001,  # Layer 3: Maker 0.01%
-            taker_fee=0.0004,  # Taker 0.04%
-            slippage_pct=0.0002,  # 滑價 0.02%
-            use_time_filter=use_time_filter,  # Layer 2
-            probability_threshold=probability_threshold  # Layer 1
+        use_24_7 = st.checkbox(
+            "24/7 交易 (全天候)",
+            value=True,
+            key="backtest_24_7"
         )
         
+        trading_hours = [(0, 24)] if use_24_7 else [(9, 14), (18, 22)]
+        
+        if not use_24_7:
+            st.info("黃金時段: 09:00-13:59, 18:00-21:59 (UTC)")
+        
+        st.markdown("---")
+        
         # 執行回測
-        with st.spinner("執行三層濾網回測... (可能需要幾分鐘)"):
+        if st.button("執行雙向智能體回測", use_container_width=True, key="backtest_run_bid"):
+            self.run_bidirectional_backtest(
+                long_model_path=models_dir / selected_long_model,
+                short_model_path=models_dir / selected_short_model,
+                initial_capital=initial_capital,
+                position_size_pct=position_size_pct,
+                tp_pct=tp_pct,
+                sl_pct=sl_pct,
+                prob_threshold_long=prob_threshold_long,
+                prob_threshold_short=prob_threshold_short,
+                hunting_expire_bars=hunting_expire_bars,
+                trading_hours=trading_hours
+            )
+    
+    def run_bidirectional_backtest(self, long_model_path: Path, short_model_path: Path,
+                                   initial_capital: float, position_size_pct: float,
+                                   tp_pct: float, sl_pct: float,
+                                   prob_threshold_long: float, prob_threshold_short: float,
+                                   hunting_expire_bars: int, trading_hours: list):
+        logger.info("Starting bidirectional agent backtest")
+        
+        # Step 1: 載入 1m K 線
+        with st.spinner("載入 1m K 線..."):
+            df_1m = self.load_klines("BTCUSDT", "1m")
+            
+            if df_1m.empty:
+                st.error("無法載入數據")
+                return
+            
+            if 'open_time' in df_1m.columns:
+                df_1m['open_time'] = pd.to_datetime(df_1m['open_time'])
+                df_1m.set_index('open_time', inplace=True)
+            
+            st.success(f"載入 {len(df_1m):,} 筆 1m K 線")
+        
+        # Step 2: 生成特徵
+        with st.spinner("生成特徵 (滾動視窗)..."):
+            df_features = self.feature_engineer.create_features_from_1m(
+                df_1m,
+                use_micro_structure=True,
+                label_type='both'
+            )
+            st.success(f"特徵生成完成: {len(df_features):,} 筆")
+        
+        # Step 3: 切分測試集
+        split_idx = int(len(df_features) * 0.8)
+        df_test = df_features.iloc[split_idx:].copy()
+        
+        st.info(f"測試集: {len(df_test):,} 筆 ({df_test.index[0]} ~ {df_test.index[-1]})")
+        
+        # Step 4: 初始化回測器
+        with st.spinner("初始化回測器..."):
+            backtester = BidirectionalAgentBacktester(
+                model_long_path=str(long_model_path),
+                model_short_path=str(short_model_path),
+                initial_capital=initial_capital,
+                position_size_pct=position_size_pct,
+                prob_threshold_long=prob_threshold_long,
+                prob_threshold_short=prob_threshold_short,
+                tp_pct=tp_pct,
+                sl_pct=sl_pct,
+                hunting_expire_bars=hunting_expire_bars,
+                trading_hours=trading_hours,
+                maker_fee=0.0001,
+                taker_fee=0.0004,
+                slippage=0.0002
+            )
+        
+        # Step 5: 執行回測
+        feature_cols = ['efficiency_ratio', 'extreme_time_diff', 'vol_imbalance_ratio',
+                       'z_score', 'bb_width_pct', 'rsi', 'atr_pct', 'z_score_1h', 'atr_pct_1d']
+        available_features = [col for col in feature_cols if col in df_test.columns]
+        
+        with st.spinner("執行回測... (可能需要 5-10 分鐘)"):
             try:
-                results = backtester.run_backtest(
-                    test_df,
-                    str(model_path)
-                )
+                results = backtester.run(df_test, available_features)
                 
                 if results:
-                    self.display_results(results, probability_threshold, use_time_filter)
+                    self.display_bidirectional_results(backtester, results)
                 else:
-                    st.error("回測失敗")
+                    st.warning("回測完成但沒有交易")
             
             except Exception as e:
                 logger.error(f"Backtest error: {str(e)}", exc_info=True)
                 st.error(f"回測錯誤: {str(e)}")
     
-    def display_results(self, results: dict, probability_threshold: float, use_time_filter: bool):
-        logger.info("Displaying 3-layer filtered backtest results")
+    def display_bidirectional_results(self, backtester: BidirectionalAgentBacktester, results: dict):
+        logger.info("Displaying bidirectional backtest results")
         
-        st.success("✅ 回測完成")
-        
-        # 顯示濾網統計
-        st.subheader("🛡️ 三層濾網效果")
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.metric(
-                "Layer 1: 機率濾網",
-                f"{results.get('filtered_signals_prob', 0):,} 個訊號",
-                delta=f"< {probability_threshold*100:.0f}%"
-            )
-        
-        with col2:
-            st.metric(
-                "Layer 2: 時間濾網",
-                f"{results.get('filtered_signals_time', 0):,} 個訊號",
-                delta="非黃金時段" if use_time_filter else "未啟用"
-            )
-        
-        with col3:
-            st.metric(
-                "Layer 3: Maker 手續費",
-                "0.01%",
-                delta="-75% vs Taker"
-            )
-        
-        st.markdown("---")
+        st.success("回測完成")
         
         # 核心指標
-        st.subheader("📊 核心指標")
+        st.markdown("---")
+        st.subheader("核心指標")
         
         col1, col2, col3, col4, col5 = st.columns(5)
         
         with col1:
-            st.metric(
-                "總交易數",
-                results['total_trades']
-            )
+            st.metric("總交易數", results.get('total_trades', 0))
         
         with col2:
-            win_rate = results['win_rate']
-            win_rate_delta = "+" if win_rate >= 0.36 else "-"
-            st.metric(
-                "實盤勝率",
-                f"{win_rate*100:.2f}%",
-                delta=f"{win_rate_delta} 目標: 36.9%+"
-            )
+            long_trades = results.get('long_trades', 0)
+            short_trades = results.get('short_trades', 0)
+            st.metric("Long / Short", f"{long_trades} / {short_trades}")
         
         with col3:
-            total_return = results['total_return']
-            st.metric(
-                "總報酬",
-                f"{total_return*100:.2f}%",
-                delta="正" if total_return > 0 else "負"
-            )
+            win_rate = results.get('win_rate', 0)
+            st.metric("勝率", f"{win_rate*100:.2f}%")
         
         with col4:
-            st.metric(
-                "最終資金",
-                f"${results['final_capital']:.2f}"
-            )
+            total_return = results.get('total_return_pct', 0)
+            st.metric("總報酬", f"{total_return*100:+.2f}%", 
+                     delta="正" if total_return > 0 else "負")
         
         with col5:
-            st.metric(
-                "最大回撤",
-                f"{results['max_drawdown']*100:.2f}%"
-            )
-        
-        # 評估
-        profit_factor = results['profit_factor']
-        
-        if win_rate >= 0.369 and total_return > 0 and profit_factor > 1.0:
-            st.success("✅ 策略達標！勝率 ≥ 36.9%, 報酬為正, Profit Factor > 1.0")
-        elif win_rate >= 0.369:
-            st.warning("⚠️ 勝率達標但報酬為負，考慮調整盈虧比或降低摩擦成本")
-        else:
-            st.error(f"❌ 勝率不足 ({win_rate*100:.2f}% < 36.9%)，需要優化模型或提高閉值")
-        
-        # 進階指標
-        st.markdown("---")
-        st.subheader("📈 進階指標")
+            final_capital = results.get('final_capital', 0)
+            st.metric("最終資金", f"${final_capital:,.2f}")
         
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            st.metric("獲利交易", results['winning_trades'])
+            st.metric("獲利交易", results.get('winning_trades', 0))
         
         with col2:
-            st.metric("虧損交易", results['losing_trades'])
+            st.metric("虧損交易", results.get('losing_trades', 0))
         
         with col3:
-            st.metric("平均獲利", f"${results['avg_win']:.2f}")
+            profit_factor = results.get('profit_factor', 0)
+            st.metric("Profit Factor", f"{profit_factor:.2f}")
         
         with col4:
-            st.metric("平均虧損", f"${results['avg_loss']:.2f}")
+            tp_rate = results.get('tp_rate', 0)
+            sl_rate = results.get('sl_rate', 0)
+            st.metric("TP / SL 比例", f"{tp_rate*100:.0f}% / {sl_rate*100:.0f}%")
         
-        col1, col2 = st.columns(2)
+        # 評估
+        if win_rate >= 0.35 and total_return > 0 and profit_factor > 1.0:
+            st.success("策略達標: 勝率 ≥ 35%, 報酬為正, Profit Factor > 1.0")
+        elif total_return > 0:
+            st.info("策略可用: 報酬為正但有提升空間")
+        else:
+            st.warning("策略需要優化: 報酬為負")
         
-        with col1:
-            st.metric("夏普比率", f"{results['sharpe_ratio']:.2f}")
-        
-        with col2:
-            pf_color = "normal"
-            if profit_factor >= 1.1:
-                pf_color = "normal"
-            st.metric(
-                "盈虧比 (Profit Factor)",
-                f"{profit_factor:.2f}",
-                delta="目標: 1.10+"
-            )
-        
-        # 資金曲線
+        # 權益曲線
         st.markdown("---")
-        st.subheader("📉 資金曲線")
+        st.subheader("資金曲線 & 狀態時間軸")
         
-        equity_df = results['equity_df']
+        equity_df = backtester.get_equity_curve()
         
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=equity_df['time'],
-            y=equity_df['equity'],
-            mode='lines',
-            name='Equity',
-            line=dict(color='green' if total_return > 0 else 'red', width=2)
-        ))
+        fig = make_subplots(
+            rows=2, cols=1,
+            subplot_titles=('資金權益曲線', '智能體狀態時間軸'),
+            vertical_spacing=0.12,
+            row_heights=[0.6, 0.4]
+        )
         
-        # 添加初始資金基準線
+        # 子圖 1: 資金曲線
+        fig.add_trace(
+            go.Scatter(
+                x=equity_df['timestamp'],
+                y=equity_df['capital'],
+                mode='lines',
+                name='Capital',
+                line=dict(color='#2E86AB', width=2)
+            ),
+            row=1, col=1
+        )
+        
         fig.add_hline(
-            y=results['final_capital'] - results['total_return'] * results['final_capital'],
+            y=backtester.initial_capital,
             line_dash="dash",
             line_color="gray",
-            annotation_text="Initial Capital"
+            annotation_text="Initial",
+            row=1, col=1
         )
         
-        fig.update_layout(
-            title="資金曲線 (Equity Curve)",
-            xaxis_title="時間",
-            yaxis_title="資金 (USD)",
-            hovermode='x unified',
-            height=500
+        # 子圖 2: 狀態時間軸
+        state_mapping = {
+            'IDLE': 0,
+            'HUNTING_LONG': 1,
+            'HUNTING_SHORT': 2,
+            'LONG_POSITION': 3,
+            'SHORT_POSITION': 4
+        }
+        equity_df['state_num'] = equity_df['state'].map(state_mapping)
+        
+        fig.add_trace(
+            go.Scatter(
+                x=equity_df['timestamp'],
+                y=equity_df['state_num'],
+                mode='markers',
+                name='State',
+                marker=dict(size=2, color='#A23B72', opacity=0.5)
+            ),
+            row=2, col=1
         )
+        
+        fig.update_yaxes(title_text="Capital ($)", row=1, col=1)
+        fig.update_yaxes(
+            title_text="State",
+            ticktext=['IDLE', 'HUNT_L', 'HUNT_S', 'LONG', 'SHORT'],
+            tickvals=[0, 1, 2, 3, 4],
+            row=2, col=1
+        )
+        fig.update_xaxes(title_text="Time", row=2, col=1)
+        
+        fig.update_layout(height=800, showlegend=False)
         
         st.plotly_chart(fig, use_container_width=True)
         
         # 交易記錄
         st.markdown("---")
-        st.subheader("📋 交易記錄 (Top 20)")
+        st.subheader("交易記錄")
         
-        trades_df = results['trades_df']
+        trades_df = backtester.get_trades_df()
         
-        display_df = trades_df[[
-            'entry_time', 'exit_time', 'entry_price', 'exit_price',
-            'exit_reason', 'gross_return', 'pnl', 'capital', 'entry_hour', 'probability'
-        ]].head(20)
-        
-        display_df['gross_return'] = display_df['gross_return'].apply(lambda x: f"{x*100:.2f}%")
-        display_df['pnl'] = display_df['pnl'].apply(lambda x: f"${x:.2f}")
-        display_df['capital'] = display_df['capital'].apply(lambda x: f"${x:.2f}")
-        display_df['probability'] = display_df['probability'].apply(lambda x: f"{x:.3f}")
-        
-        st.dataframe(display_df, use_container_width=True)
-        
-        # 下載報告
-        st.markdown("---")
-        
-        report_dir = Path("backtest_reports")
-        report_dir.mkdir(exist_ok=True)
-        
-        report_path = report_dir / f"backtest_3layer_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        trades_df.to_csv(report_path, index=False)
-        
-        st.success(f"💾 交易記錄已保存: {report_path}")
-        logger.info(f"Backtest report saved to {report_path}")
+        if not trades_df.empty:
+            # 顯示統計
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.metric("平均獲利", f"${results.get('avg_win', 0):+.2f}")
+            
+            with col2:
+                st.metric("平均虧損", f"${results.get('avg_loss', 0):+.2f}")
+            
+            # 顯示交易表格
+            display_df = trades_df[[
+                'entry_time', 'entry_price', 'exit_time', 'exit_price',
+                'direction', 'exit_reason', 'pnl_pct', 'pnl_net', 'fees'
+            ]].head(50)
+            
+            display_df['pnl_pct'] = display_df['pnl_pct'].apply(lambda x: f"{x*100:+.2f}%")
+            display_df['pnl_net'] = display_df['pnl_net'].apply(lambda x: f"${x:+.2f}")
+            display_df['fees'] = display_df['fees'].apply(lambda x: f"${x:.2f}")
+            
+            st.dataframe(display_df, use_container_width=True, height=400)
+            
+            # 下載報告
+            report_dir = Path("backtest_results")
+            report_dir.mkdir(exist_ok=True)
+            
+            timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
+            trades_path = report_dir / f"bidirectional_trades_{timestamp}.csv"
+            trades_df.to_csv(trades_path, index=False)
+            
+            st.success(f"交易記錄已儲存: {trades_path}")
+        else:
+            st.info("沒有交易記錄")
+    
+    def render_unidirectional(self):
+        """單向回測介面 (保留)"""
+        st.info("單向回測功能保留,建議使用雙向智能體回測")
+        st.markdown("""
+        **建議使用雙向回測**:
+        - 更高交易頻率
+        - 市場中性策略
+        - 牛熊市都能獲利
+        - 四大死亡陷阱處理
+        """)
