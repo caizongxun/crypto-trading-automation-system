@@ -1,219 +1,535 @@
 import pandas as pd
 import numpy as np
 from pathlib import Path
-import joblib
 import sys
+from enum import Enum
+from dataclasses import dataclass
+from typing import Optional, Dict, List
+import joblib
 
 sys.path.append(str(Path(__file__).parent.parent))
 from utils.logger import setup_logger
-from utils.execution_agent import ExecutionAgent
 
 logger = setup_logger('agent_backtester', 'logs/agent_backtester.log')
 
-class AgentBacktester:
+class AgentState(Enum):
+    """智能體狀態機"""
+    IDLE = "IDLE"                          # 空手,等待機會
+    HUNTING_LONG = "HUNTING_LONG"          # 做多狩獵中,限價單掉下方
+    HUNTING_SHORT = "HUNTING_SHORT"        # 做空狩獵中,限價單挂上方
+    LONG_POSITION = "LONG_POSITION"        # 持有多單
+    SHORT_POSITION = "SHORT_POSITION"      # 持有空單
+
+@dataclass
+class Trade:
+    """交易記錄"""
+    entry_time: pd.Timestamp
+    entry_price: float
+    exit_time: pd.Timestamp
+    exit_price: float
+    direction: str  # 'LONG' or 'SHORT'
+    exit_reason: str  # 'TP', 'SL', 'TIMEOUT'
+    pnl_pct: float
+    pnl_net: float  # 扣除手續費後的淨利
+    fees: float
+
+class BidirectionalAgentBacktester:
     """
-    Agent 專用回測引擎
+    雙向智能體回測框架 - 事件驅動狀態機
     
-    核心特性:
-    1. 1m K 線運作，15m 整點同步大腦
-    2. 悲觀成交規則: low < limit_price 才成交
-    3. 非對稱手續費: Maker/Taker 分離計算
-    4. 幽靈部位防護: 新訊號自動取消舊單
+    **核心特性**:
+    - 事件驅動: 逐根 1m K 線處理
+    - 狀態機: 5 種狀態嚴格流轉
+    - 悉觀成交: 限價單必須嚴格穿越
+    - 薫丁格處理: 同時觸及 TP+SL 則 SL 優先
+    - 不對稱成本: Maker/Taker 分離計算
+    - 訂單過期: 15 分鐘未成交自動取消
     """
     
-    def __init__(self, agent: ExecutionAgent, model_path: str):
+    def __init__(self,
+                 model_long_path: str,
+                 model_short_path: str,
+                 initial_capital: float = 10000.0,
+                 position_size_pct: float = 0.95,
+                 prob_threshold_long: float = 0.65,
+                 prob_threshold_short: float = 0.65,
+                 tp_pct: float = 0.02,
+                 sl_pct: float = 0.01,
+                 hunting_expire_bars: int = 15,
+                 trading_hours: Optional[List[tuple]] = None,
+                 maker_fee: float = 0.0001,
+                 taker_fee: float = 0.0004,
+                 slippage: float = 0.0002):
         """
         Args:
-            agent: ExecutionAgent 實例
-            model_path: 模型路徑 (.pkl 檔案)
+            model_long_path: Long Oracle 模型路徑
+            model_short_path: Short Oracle 模型路徑
+            initial_capital: 初始資金
+            position_size_pct: 每筆交易使用資金比例
+            prob_threshold_long: Long 機率閾值
+            prob_threshold_short: Short 機率閾值
+            tp_pct: 停利百分比
+            sl_pct: 停損百分比
+            hunting_expire_bars: 狩獵狀態過期時間 (1m K 線數)
+            trading_hours: 交易時段 [(9, 14), (18, 22)]
+            maker_fee: Maker 手續費 (限價單)
+            taker_fee: Taker 手續費 (市價單)
+            slippage: 滑價
         """
-        logger.info("Initializing AgentBacktester")
-        
-        self.agent = agent
+        logger.info("="*80)
+        logger.info("INITIALIZING BIDIRECTIONAL AGENT BACKTESTER")
+        logger.info("="*80)
         
         # 載入模型
-        logger.info(f"Loading model from {model_path}")
-        self.model = joblib.load(model_path)
+        self.model_long = joblib.load(model_long_path)
+        self.model_short = joblib.load(model_short_path)
+        logger.info(f"Loaded Long Oracle: {model_long_path}")
+        logger.info(f"Loaded Short Oracle: {model_short_path}")
         
-        # 記錄
-        self.actions = []
-        self.probabilities = []
+        # 資金設定
+        self.initial_capital = initial_capital
+        self.position_size_pct = position_size_pct
+        self.capital = initial_capital
         
-        logger.info("AgentBacktester initialized")
+        # 機率閾值
+        self.prob_threshold_long = prob_threshold_long
+        self.prob_threshold_short = prob_threshold_short
+        
+        # 風控參數
+        self.tp_pct = tp_pct
+        self.sl_pct = sl_pct
+        self.hunting_expire_bars = hunting_expire_bars
+        
+        # 交易時段
+        self.trading_hours = trading_hours or [(9, 14), (18, 22)]
+        
+        # 成本參數
+        self.maker_fee = maker_fee
+        self.taker_fee = taker_fee
+        self.slippage = slippage
+        
+        # 狀態追蹤
+        self.state = AgentState.IDLE
+        self.hunting_entry_bar = None  # 進入 HUNTING 的 bar index
+        self.limit_order_price = None
+        self.entry_time = None
+        self.entry_price = None
+        self.position_size = None
+        self.tp_price = None
+        self.sl_price = None
+        
+        # 回測結果
+        self.trades: List[Trade] = []
+        self.equity_curve = []
+        self.state_history = []
+        
+        logger.info(f"Initial capital: ${initial_capital:,.2f}")
+        logger.info(f"Position size: {position_size_pct*100:.1f}% of capital")
+        logger.info(f"Prob thresholds: Long={prob_threshold_long:.2f}, Short={prob_threshold_short:.2f}")
+        logger.info(f"TP/SL: {tp_pct*100:.1f}% / {sl_pct*100:.1f}%")
+        logger.info(f"Trading hours: {self.trading_hours}")
+        logger.info(f"Fees: Maker={maker_fee*10000:.1f}bp, Taker={taker_fee*10000:.1f}bp, Slippage={slippage*10000:.1f}bp")
+        logger.info("="*80)
     
-    def run(self, df_1m: pd.DataFrame, df_15m: pd.DataFrame) -> dict:
+    def is_trading_hours(self, timestamp: pd.Timestamp) -> bool:
+        """檢查是否在交易時段"""
+        hour = timestamp.hour
+        for start, end in self.trading_hours:
+            if start <= hour < end:
+                return True
+        return False
+    
+    def get_oracle_signals(self, features: np.ndarray) -> tuple:
         """
-        執行 Agent 回測
+        獲取雙向大腦預測
         
         Args:
-            df_1m: 1m K 線資料 (open_time, open, high, low, close, volume)
-            df_15m: 15m 特徵資料 (包含所有特徵)
+            features: 1D array of features for current bar
         
         Returns:
-            results: 回測結果
+            (prob_long, prob_short)
+        """
+        features_2d = features.reshape(1, -1)
+        prob_long = self.model_long.predict_proba(features_2d)[0, 1]
+        prob_short = self.model_short.predict_proba(features_2d)[0, 1]
+        return prob_long, prob_short
+    
+    def calculate_fees(self, trade_value: float, is_maker: bool = True) -> float:
+        """計算手續費"""
+        fee_rate = self.maker_fee if is_maker else (self.taker_fee + self.slippage)
+        return trade_value * fee_rate
+    
+    def execute_trade(self, direction: str, entry_price: float, exit_price: float, 
+                     exit_reason: str, entry_time: pd.Timestamp, exit_time: pd.Timestamp):
+        """
+        執行交易並記錄
+        
+        Args:
+            direction: 'LONG' or 'SHORT'
+            entry_price: 進場價
+            exit_price: 出場價
+            exit_reason: 'TP', 'SL', 'TIMEOUT'
+            entry_time: 進場時間
+            exit_time: 出場時間
+        """
+        # 計算比例獲利
+        if direction == 'LONG':
+            pnl_pct = (exit_price - entry_price) / entry_price
+        else:  # SHORT
+            pnl_pct = (entry_price - exit_price) / entry_price
+        
+        # 計算手續費
+        trade_value = self.position_size
+        entry_fee = self.calculate_fees(trade_value, is_maker=True)  # 限價進場
+        
+        if exit_reason == 'SL':
+            # 停損用市價單 + 滑價
+            exit_fee = self.calculate_fees(trade_value, is_maker=False)
+        else:
+            # TP 或 TIMEOUT 用限價單
+            exit_fee = self.calculate_fees(trade_value, is_maker=True)
+        
+        total_fees = entry_fee + exit_fee
+        
+        # 淨利
+        gross_pnl = self.position_size * pnl_pct
+        net_pnl = gross_pnl - total_fees
+        
+        # 更新資金
+        self.capital += net_pnl
+        
+        # 記錄交易
+        trade = Trade(
+            entry_time=entry_time,
+            entry_price=entry_price,
+            exit_time=exit_time,
+            exit_price=exit_price,
+            direction=direction,
+            exit_reason=exit_reason,
+            pnl_pct=pnl_pct,
+            pnl_net=net_pnl,
+            fees=total_fees
+        )
+        self.trades.append(trade)
+        
+        logger.info(f"TRADE CLOSED: {direction} | Entry={entry_price:.2f} | Exit={exit_price:.2f} | "
+                   f"Reason={exit_reason} | PnL={net_pnl:+.2f} ({pnl_pct*100:+.2f}%) | "
+                   f"Fees={total_fees:.2f} | Capital={self.capital:.2f}")
+    
+    def process_bar(self, bar_idx: int, row: pd.Series, features: np.ndarray):
+        """
+        處理單根 K 線 - 狀態機核心
+        
+        Args:
+            bar_idx: K 線索引
+            row: K 線數據 (open, high, low, close, volume)
+            features: 當前 K 線的特徵
+        """
+        timestamp = row.name
+        open_price = row['open']
+        high_price = row['high']
+        low_price = row['low']
+        close_price = row['close']
+        
+        # === 狀態 1: IDLE ===
+        if self.state == AgentState.IDLE:
+            # 檢查交易時段
+            if not self.is_trading_hours(timestamp):
+                return
+            
+            # 獲取大腦信號
+            prob_long, prob_short = self.get_oracle_signals(features)
+            
+            # 檢查 Long 信號
+            if prob_long >= self.prob_threshold_long:
+                # 進入 HUNTING_LONG,在下方挂限價單
+                self.state = AgentState.HUNTING_LONG
+                self.hunting_entry_bar = bar_idx
+                # 限價單掉在 close 下方 0.5%
+                self.limit_order_price = close_price * 0.995
+                logger.info(f"[{timestamp}] IDLE -> HUNTING_LONG | prob={prob_long:.4f} | limit_order={self.limit_order_price:.2f}")
+                return
+            
+            # 檢查 Short 信號
+            if prob_short >= self.prob_threshold_short:
+                # 進入 HUNTING_SHORT,在上方挂限價單
+                self.state = AgentState.HUNTING_SHORT
+                self.hunting_entry_bar = bar_idx
+                # 限價單挂在 close 上方 0.5%
+                self.limit_order_price = close_price * 1.005
+                logger.info(f"[{timestamp}] IDLE -> HUNTING_SHORT | prob={prob_short:.4f} | limit_order={self.limit_order_price:.2f}")
+                return
+        
+        # === 狀態 2: HUNTING_LONG ===
+        elif self.state == AgentState.HUNTING_LONG:
+            # 檢查訂單過期
+            if bar_idx - self.hunting_entry_bar >= self.hunting_expire_bars:
+                logger.info(f"[{timestamp}] HUNTING_LONG expired (15 min) -> IDLE")
+                self.state = AgentState.IDLE
+                self.hunting_entry_bar = None
+                self.limit_order_price = None
+                return
+            
+            # 檢查悉觀成交 (嚴格小於)
+            if low_price < self.limit_order_price:
+                # 成交
+                self.state = AgentState.LONG_POSITION
+                self.entry_time = timestamp
+                self.entry_price = self.limit_order_price
+                self.position_size = self.capital * self.position_size_pct
+                self.tp_price = self.entry_price * (1 + self.tp_pct)
+                self.sl_price = self.entry_price * (1 - self.sl_pct)
+                logger.info(f"[{timestamp}] HUNTING_LONG -> LONG_POSITION | entry={self.entry_price:.2f} | "
+                           f"TP={self.tp_price:.2f} | SL={self.sl_price:.2f} | size={self.position_size:.2f}")
+                return
+        
+        # === 狀態 3: HUNTING_SHORT ===
+        elif self.state == AgentState.HUNTING_SHORT:
+            # 檢查訂單過期
+            if bar_idx - self.hunting_entry_bar >= self.hunting_expire_bars:
+                logger.info(f"[{timestamp}] HUNTING_SHORT expired (15 min) -> IDLE")
+                self.state = AgentState.IDLE
+                self.hunting_entry_bar = None
+                self.limit_order_price = None
+                return
+            
+            # 檢查悉觀成交 (嚴格大於)
+            if high_price > self.limit_order_price:
+                # 成交
+                self.state = AgentState.SHORT_POSITION
+                self.entry_time = timestamp
+                self.entry_price = self.limit_order_price
+                self.position_size = self.capital * self.position_size_pct
+                self.tp_price = self.entry_price * (1 - self.tp_pct)
+                self.sl_price = self.entry_price * (1 + self.sl_pct)
+                logger.info(f"[{timestamp}] HUNTING_SHORT -> SHORT_POSITION | entry={self.entry_price:.2f} | "
+                           f"TP={self.tp_price:.2f} | SL={self.sl_price:.2f} | size={self.position_size:.2f}")
+                return
+        
+        # === 狀態 4: LONG_POSITION ===
+        elif self.state == AgentState.LONG_POSITION:
+            # 檢查薫丁格狀態 (同時觸及 TP 和 SL)
+            tp_hit = high_price >= self.tp_price
+            sl_hit = low_price <= self.sl_price
+            
+            if tp_hit and sl_hit:
+                # 薫丁格案例: 假設最壞情況,先觸及 SL
+                self.execute_trade(
+                    direction='LONG',
+                    entry_price=self.entry_price,
+                    exit_price=self.sl_price,
+                    exit_reason='SL',
+                    entry_time=self.entry_time,
+                    exit_time=timestamp
+                )
+                self.state = AgentState.IDLE
+                logger.info(f"[{timestamp}] Schrodinger case: Both TP and SL hit -> SL executed first (worst case)")
+                return
+            
+            if tp_hit:
+                # 停利
+                self.execute_trade(
+                    direction='LONG',
+                    entry_price=self.entry_price,
+                    exit_price=self.tp_price,
+                    exit_reason='TP',
+                    entry_time=self.entry_time,
+                    exit_time=timestamp
+                )
+                self.state = AgentState.IDLE
+                return
+            
+            if sl_hit:
+                # 停損
+                self.execute_trade(
+                    direction='LONG',
+                    entry_price=self.entry_price,
+                    exit_price=self.sl_price,
+                    exit_reason='SL',
+                    entry_time=self.entry_time,
+                    exit_time=timestamp
+                )
+                self.state = AgentState.IDLE
+                return
+        
+        # === 狀態 5: SHORT_POSITION ===
+        elif self.state == AgentState.SHORT_POSITION:
+            # 檢查薫丁格狀態
+            tp_hit = low_price <= self.tp_price
+            sl_hit = high_price >= self.sl_price
+            
+            if tp_hit and sl_hit:
+                # 薫丁格案例: 假設最壞情況,先觸及 SL
+                self.execute_trade(
+                    direction='SHORT',
+                    entry_price=self.entry_price,
+                    exit_price=self.sl_price,
+                    exit_reason='SL',
+                    entry_time=self.entry_time,
+                    exit_time=timestamp
+                )
+                self.state = AgentState.IDLE
+                logger.info(f"[{timestamp}] Schrodinger case: Both TP and SL hit -> SL executed first (worst case)")
+                return
+            
+            if tp_hit:
+                # 停利
+                self.execute_trade(
+                    direction='SHORT',
+                    entry_price=self.entry_price,
+                    exit_price=self.tp_price,
+                    exit_reason='TP',
+                    entry_time=self.entry_time,
+                    exit_time=timestamp
+                )
+                self.state = AgentState.IDLE
+                return
+            
+            if sl_hit:
+                # 停損
+                self.execute_trade(
+                    direction='SHORT',
+                    entry_price=self.entry_price,
+                    exit_price=self.sl_price,
+                    exit_reason='SL',
+                    entry_time=self.entry_time,
+                    exit_time=timestamp
+                )
+                self.state = AgentState.IDLE
+                return
+    
+    def run(self, df_test: pd.DataFrame, feature_cols: List[str]) -> Dict:
+        """
+        執行回測
+        
+        Args:
+            df_test: 測試集 (OHLCV + features)
+            feature_cols: 特徵欄位名稱
+        
+        Returns:
+            回測結果字典
         """
         logger.info("="*80)
-        logger.info("AGENT BACKTESTING")
+        logger.info("STARTING BACKTEST")
         logger.info("="*80)
-        logger.info(f"1m bars: {len(df_1m)}")
-        logger.info(f"15m bars: {len(df_15m)}")
+        logger.info(f"Test period: {df_test.index[0]} to {df_test.index[-1]}")
+        logger.info(f"Total bars: {len(df_test):,}")
+        logger.info(f"Features: {feature_cols}")
+        logger.info("="*80)
         
-        # 確保索引是 DatetimeIndex
-        if not isinstance(df_1m.index, pd.DatetimeIndex):
-            df_1m = df_1m.set_index('open_time')
-        
-        if not isinstance(df_15m.index, pd.DatetimeIndex):
-            df_15m = df_15m.set_index('open_time')
-        
-        # 預測 15m 機率
-        logger.info("Generating 15m probabilities...")
-        probabilities_15m = self._generate_probabilities(df_15m)
-        
-        # 遍歷每根 1m K 線
-        logger.info("Processing 1m bars...")
-        
-        for timestamp, row in df_1m.iterrows():
-            # 準備 1m bar 資料
-            bar_1m = {
-                'open': row['open'],
-                'high': row['high'],
-                'low': row['low'],
-                'close': row['close'],
-                'volume': row['volume']
-            }
+        # 逐根 K 線處理
+        for bar_idx, (timestamp, row) in enumerate(df_test.iterrows()):
+            # 獲取特徵
+            features = row[feature_cols].values
             
-            # 檢查是否是 15m 整點 (xx:00, xx:15, xx:30, xx:45)
-            minute = timestamp.minute
-            is_15m_point = (minute % 15 == 0)
+            # 處理當前 K 線
+            self.process_bar(bar_idx, row, features)
             
-            # 在 15m 整點時，提供大腦機率
-            if is_15m_point:
-                # 對齊到 15m 時間
-                aligned_15m_time = timestamp.floor('15min')
-                
-                # 幽靈部位防護: 新訊號前取消所有未成交訂單
-                self.agent.cancel_all_pending_orders()
-                
-                # 獲取機率
-                if aligned_15m_time in probabilities_15m.index:
-                    probability = probabilities_15m.loc[aligned_15m_time]
-                    self.probabilities.append({
-                        'timestamp': timestamp,
-                        'probability': probability
-                    })
-                else:
-                    probability = None
-            else:
-                probability = None
+            # 記錄權益曲線
+            self.equity_curve.append({
+                'timestamp': timestamp,
+                'capital': self.capital,
+                'state': self.state.value
+            })
             
-            # Agent 處理當前 bar
-            action = self.agent.process_bar(timestamp, bar_1m, probability)
-            self.actions.append(action)
-            
-            # 每 1000 根輸出進度
-            if len(self.actions) % 1000 == 0:
-                logger.info(f"  Processed {len(self.actions)} bars, Capital: ${self.agent.capital:.2f}")
+            # 進度顯示
+            if (bar_idx + 1) % 10000 == 0:
+                logger.info(f"Processed {bar_idx+1:,}/{len(df_test):,} bars ({(bar_idx+1)/len(df_test)*100:.1f}%)")
         
-        # 結束回測
-        logger.info("Backtesting completed")
+        # 計算統計指標
+        results = self.calculate_metrics()
         
-        # 強制平倉未結清部位
-        if self.agent.position is not None:
-            logger.warning("Closing open position at end of backtest")
-            final_bar = df_1m.iloc[-1]
-            final_action = self.agent._close_position(
-                timestamp=df_1m.index[-1],
-                exit_price=final_bar['close'],
-                exit_reason='backtest_end',
-                exit_type='taker'
-            )
-            self.actions.append(final_action)
-        
-        # 獲取統計
-        stats = self.agent.get_statistics()
-        
-        # 生成報告
-        results = self._generate_report(stats)
+        logger.info("="*80)
+        logger.info("BACKTEST COMPLETED")
+        logger.info("="*80)
         
         return results
     
-    def _generate_probabilities(self, df_15m: pd.DataFrame) -> pd.Series:
-        """
-        生成 15m 機率
+    def calculate_metrics(self) -> Dict:
+        """計算回測統計指標"""
+        if len(self.trades) == 0:
+            logger.warning("No trades executed during backtest")
+            return {}
         
-        Args:
-            df_15m: 15m 特徵資料
+        # 基礎指標
+        total_trades = len(self.trades)
+        long_trades = [t for t in self.trades if t.direction == 'LONG']
+        short_trades = [t for t in self.trades if t.direction == 'SHORT']
         
-        Returns:
-            probabilities: 機率序列
-        """
-        # 獲取特徵欄位
-        feature_cols = [
-            '1m_bull_sweep', '1m_bear_sweep', '1m_bull_bos', '1m_bear_bos', '1m_dist_to_poc',
-            '15m_z_score', '15m_bb_width_pct',
-            '1h_z_score', '1d_atr_pct',
-            'hour', 'day_of_week', 'session_asia', 'session_europe', 'session_us',
-            'session_overlap', 'is_weekend', 'hour_sin', 'hour_cos', 'dow_sin', 'dow_cos',
-            'rvol', 'sweep_with_high_rvol',
-            'volatility_squeeze_ratio',
-            'is_bullish_divergence', 'is_macd_bullish_divergence'
-        ]
+        winning_trades = [t for t in self.trades if t.pnl_net > 0]
+        losing_trades = [t for t in self.trades if t.pnl_net <= 0]
         
-        available_features = [col for col in feature_cols if col in df_15m.columns]
+        win_rate = len(winning_trades) / total_trades if total_trades > 0 else 0
         
-        X = df_15m[available_features].copy()
-        X = X.replace([np.inf, -np.inf], np.nan).fillna(0)
+        total_pnl = sum(t.pnl_net for t in self.trades)
+        total_return_pct = (self.capital - self.initial_capital) / self.initial_capital
         
-        # 預測機率
-        probabilities = self.model.predict_proba(X)[:, 1]
+        avg_win = np.mean([t.pnl_net for t in winning_trades]) if winning_trades else 0
+        avg_loss = np.mean([t.pnl_net for t in losing_trades]) if losing_trades else 0
+        profit_factor = abs(sum(t.pnl_net for t in winning_trades) / sum(t.pnl_net for t in losing_trades)) if losing_trades else np.inf
         
-        return pd.Series(probabilities, index=df_15m.index)
-    
-    def _generate_report(self, stats: dict) -> dict:
-        """生成報告"""
-        logger.info("="*80)
-        logger.info("AGENT BACKTEST RESULTS")
-        logger.info("="*80)
-        logger.info(f"Total Trades: {stats['total_trades']}")
-        logger.info(f"Winning Trades: {stats['winning_trades']}")
-        logger.info(f"Losing Trades: {stats['losing_trades']}")
-        logger.info(f"Win Rate: {stats['win_rate']*100:.2f}%")
-        logger.info(f"Total PnL: ${stats['total_pnl']:.2f}")
-        logger.info(f"Avg PnL: ${stats['avg_pnl']:.2f}")
-        logger.info(f"Final Capital: ${stats['final_capital']:.2f}")
-        logger.info(f"Return: {stats['return_pct']*100:.2f}%")
-        logger.info("="*80)
+        # 停利/停損統計
+        tp_trades = [t for t in self.trades if t.exit_reason == 'TP']
+        sl_trades = [t for t in self.trades if t.exit_reason == 'SL']
+        tp_rate = len(tp_trades) / total_trades if total_trades > 0 else 0
+        sl_rate = len(sl_trades) / total_trades if total_trades > 0 else 0
         
-        # 按出場原因分類
-        if stats['total_trades'] > 0:
-            df_trades = stats['trades_df']
-            
-            logger.info("\nExit Reason Breakdown:")
-            exit_counts = df_trades['exit_reason'].value_counts()
-            for reason, count in exit_counts.items():
-                pct = count / len(df_trades) * 100
-                avg_pnl = df_trades[df_trades['exit_reason'] == reason]['pnl'].mean()
-                logger.info(f"  {reason}: {count} ({pct:.1f}%), Avg PnL: ${avg_pnl:.2f}")
-            
-            logger.info("\nExit Type Breakdown:")
-            type_counts = df_trades['exit_type'].value_counts()
-            for exit_type, count in type_counts.items():
-                pct = count / len(df_trades) * 100
-                logger.info(f"  {exit_type}: {count} ({pct:.1f}%)")
-        
-        return {
-            'statistics': stats,
-            'actions': self.actions,
-            'probabilities': self.probabilities
+        results = {
+            'total_trades': total_trades,
+            'long_trades': len(long_trades),
+            'short_trades': len(short_trades),
+            'winning_trades': len(winning_trades),
+            'losing_trades': len(losing_trades),
+            'win_rate': win_rate,
+            'total_pnl': total_pnl,
+            'total_return_pct': total_return_pct,
+            'final_capital': self.capital,
+            'avg_win': avg_win,
+            'avg_loss': avg_loss,
+            'profit_factor': profit_factor,
+            'tp_rate': tp_rate,
+            'sl_rate': sl_rate,
+            'tp_count': len(tp_trades),
+            'sl_count': len(sl_trades)
         }
-    
-    def save_results(self, output_path: str):
-        """保存結果"""
-        stats = self.agent.get_statistics()
         
-        if stats['total_trades'] > 0:
-            df_trades = stats['trades_df']
-            df_trades.to_csv(output_path, index=False)
-            logger.info(f"Results saved to {output_path}")
-        else:
-            logger.warning("No trades to save")
+        # 顯示結果
+        logger.info("="*80)
+        logger.info("BACKTEST RESULTS")
+        logger.info("="*80)
+        logger.info(f"Total Trades: {total_trades}")
+        logger.info(f"  Long: {len(long_trades)} | Short: {len(short_trades)}")
+        logger.info(f"Win Rate: {win_rate*100:.2f}% ({len(winning_trades)}/{total_trades})")
+        logger.info(f"Total PnL: ${total_pnl:+,.2f}")
+        logger.info(f"Total Return: {total_return_pct*100:+.2f}%")
+        logger.info(f"Final Capital: ${self.capital:,.2f}")
+        logger.info(f"Avg Win: ${avg_win:+.2f} | Avg Loss: ${avg_loss:+.2f}")
+        logger.info(f"Profit Factor: {profit_factor:.2f}")
+        logger.info(f"TP Rate: {tp_rate*100:.1f}% ({len(tp_trades)}/{total_trades})")
+        logger.info(f"SL Rate: {sl_rate*100:.1f}% ({len(sl_trades)}/{total_trades})")
+        logger.info("="*80)
+        
+        return results
+    
+    def get_equity_curve(self) -> pd.DataFrame:
+        """獲取權益曲線"""
+        return pd.DataFrame(self.equity_curve)
+    
+    def get_trades_df(self) -> pd.DataFrame:
+        """獲取交易記錄"""
+        if not self.trades:
+            return pd.DataFrame()
+        
+        trades_data = [{
+            'entry_time': t.entry_time,
+            'entry_price': t.entry_price,
+            'exit_time': t.exit_time,
+            'exit_price': t.exit_price,
+            'direction': t.direction,
+            'exit_reason': t.exit_reason,
+            'pnl_pct': t.pnl_pct,
+            'pnl_net': t.pnl_net,
+            'fees': t.fees
+        } for t in self.trades]
+        
+        return pd.DataFrame(trades_data)
