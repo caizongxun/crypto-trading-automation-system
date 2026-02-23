@@ -75,6 +75,12 @@ class BacktestingTab:
         - 薫丁格處理: 同時觸及 TP+SL 則 SL 優先
         - 不對稱成本: Maker 0.01%, Taker 0.04% + 滑價 0.02%
         - 訂單過期: 15 分鐘未成交自動取消
+        
+        **機率校準說明**:
+        - 模型經過 Isotonic Regression 校準
+        - 輸出是**真實統計機率** (非原始 score)
+        - 基礎勝率 5-6%, 故 0.15 = 3x Lift (已是強訊號)
+        - 0.25 = 5x Lift (極強訊號)
         """)
         
         st.markdown("---")
@@ -130,11 +136,12 @@ class BacktestingTab:
         with col2:
             position_size_pct = st.slider(
                 "仓位比例 (%)",
-                min_value=10,
-                max_value=100,
-                value=95,
+                min_value=5,
+                max_value=50,
+                value=10,
                 step=5,
-                key="backtest_position_size"
+                key="backtest_position_size",
+                help="每筆交易使用的資金比例"
             ) / 100
         
         with col3:
@@ -162,21 +169,23 @@ class BacktestingTab:
         with col1:
             prob_threshold_long = st.slider(
                 "Long 機率閾值",
-                min_value=0.50,
-                max_value=0.80,
-                value=0.65,
-                step=0.05,
-                key="backtest_prob_long"
+                min_value=0.10,
+                max_value=0.50,
+                value=0.15,
+                step=0.01,
+                key="backtest_prob_long",
+                help="經 Isotonic 校準後的真實機率。0.15 = 3x Lift, 0.25 = 5x Lift"
             )
         
         with col2:
             prob_threshold_short = st.slider(
                 "Short 機率閾值",
-                min_value=0.50,
-                max_value=0.80,
-                value=0.65,
-                step=0.05,
-                key="backtest_prob_short"
+                min_value=0.10,
+                max_value=0.50,
+                value=0.15,
+                step=0.01,
+                key="backtest_prob_short",
+                help="經 Isotonic 校準後的真實機率。0.15 = 3x Lift, 0.25 = 5x Lift"
             )
         
         with col3:
@@ -190,6 +199,13 @@ class BacktestingTab:
             )
         
         st.markdown("---")
+        
+        # 機率分布說明
+        st.info(
+            f"🔍 **機率閾值解讀**: 基礎勝率 5-6%, "
+            f"Long 閾值 {prob_threshold_long:.2f} = {prob_threshold_long/0.05:.1f}x Lift, "
+            f"Short 閾值 {prob_threshold_short:.2f} = {prob_threshold_short/0.05:.1f}x Lift"
+        )
         
         # 交易時段設定
         st.subheader("交易時段")
@@ -208,7 +224,7 @@ class BacktestingTab:
         st.markdown("---")
         
         # 執行回測
-        if st.button("執行雙向智能體回測", use_container_width=True, key="backtest_run_bid"):
+        if st.button("🚀 執行雙向智能體回測", use_container_width=True, key="backtest_run_bid"):
             self.run_bidirectional_backtest(
                 long_model_path=models_dir / selected_long_model,
                 short_model_path=models_dir / selected_short_model,
@@ -285,10 +301,11 @@ class BacktestingTab:
             try:
                 results = backtester.run(df_test, available_features)
                 
-                if results:
+                if results and results.get('total_trades', 0) > 0:
                     self.display_bidirectional_results(backtester, results)
                 else:
-                    st.warning("回測完成但沒有交易")
+                    st.warning("回測完成但沒有交易。請檢查 logs/agent_backtester.log 中的機率分布統計。")
+                    st.info("如果機率最大值 < 0.15, 請降低閾值到 0.10-0.12")
             
             except Exception as e:
                 logger.error(f"Backtest error: {str(e)}", exc_info=True)
@@ -297,11 +314,11 @@ class BacktestingTab:
     def display_bidirectional_results(self, backtester: BidirectionalAgentBacktester, results: dict):
         logger.info("Displaying bidirectional backtest results")
         
-        st.success("回測完成")
+        st.success("✅ 回測完成")
         
         # 核心指標
         st.markdown("---")
-        st.subheader("核心指標")
+        st.subheader("📊 核心指標")
         
         col1, col2, col3, col4, col5 = st.columns(5)
         
@@ -345,15 +362,15 @@ class BacktestingTab:
         
         # 評估
         if win_rate >= 0.35 and total_return > 0 and profit_factor > 1.0:
-            st.success("策略達標: 勝率 ≥ 35%, 報酬為正, Profit Factor > 1.0")
+            st.success("✅ 策略達標: 勝率 ≥ 35%, 報酬為正, Profit Factor > 1.0")
         elif total_return > 0:
-            st.info("策略可用: 報酬為正但有提升空間")
+            st.info("ℹ️ 策略可用: 報酬為正但有提升空間")
         else:
-            st.warning("策略需要優化: 報酬為負")
+            st.warning("⚠️ 策略需要優化: 報酬為負")
         
         # 權益曲線
         st.markdown("---")
-        st.subheader("資金曲線 & 狀態時間軸")
+        st.subheader("📈 資金曲線 & 狀態時間軸")
         
         equity_df = backtester.get_equity_curve()
         
@@ -420,7 +437,7 @@ class BacktestingTab:
         
         # 交易記錄
         st.markdown("---")
-        st.subheader("交易記錄")
+        st.subheader("📋 交易記錄")
         
         trades_df = backtester.get_trades_df()
         
@@ -437,12 +454,13 @@ class BacktestingTab:
             # 顯示交易表格
             display_df = trades_df[[
                 'entry_time', 'entry_price', 'exit_time', 'exit_price',
-                'direction', 'exit_reason', 'pnl_pct', 'pnl_net', 'fees'
+                'direction', 'exit_reason', 'pnl_pct', 'pnl_net', 'fees', 'probability'
             ]].head(50)
             
             display_df['pnl_pct'] = display_df['pnl_pct'].apply(lambda x: f"{x*100:+.2f}%")
             display_df['pnl_net'] = display_df['pnl_net'].apply(lambda x: f"${x:+.2f}")
             display_df['fees'] = display_df['fees'].apply(lambda x: f"${x:.2f}")
+            display_df['probability'] = display_df['probability'].apply(lambda x: f"{x:.3f}")
             
             st.dataframe(display_df, use_container_width=True, height=400)
             
@@ -454,7 +472,7 @@ class BacktestingTab:
             trades_path = report_dir / f"bidirectional_trades_{timestamp}.csv"
             trades_df.to_csv(trades_path, index=False)
             
-            st.success(f"交易記錄已儲存: {trades_path}")
+            st.success(f"✅ 交易記錄已儲存: {trades_path}")
         else:
             st.info("沒有交易記錄")
     
