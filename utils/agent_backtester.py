@@ -36,13 +36,13 @@ class Trade:
 
 class BidirectionalAgentBacktester:
     """
-    雙向事件驅動智能體 - 動態特徵抓取版
+    雙向事件驅動智能體 - 機率校準版
     
     **核心修復**:
-    - 從模型直接讀取特徵名稱 (永不錯位)
-    - 批次預測機率 (避免逐筆報錯)
-    - 雙向互斥決策邏輯
-    - 完整的非對稱手續費
+    - 從模型讀取特徵
+    - 批次預測機率
+    - 雙向互斥 (prob_opposite < 0.10)
+    - Debug 探測器
     """
     
     def __init__(self,
@@ -50,8 +50,8 @@ class BidirectionalAgentBacktester:
                  model_short_path: str,
                  initial_capital: float = 10000.0,
                  position_size_pct: float = 0.10,
-                 prob_threshold_long: float = 0.65,
-                 prob_threshold_short: float = 0.65,
+                 prob_threshold_long: float = 0.15,
+                 prob_threshold_short: float = 0.15,
                  tp_pct: float = 0.02,
                  sl_pct: float = 0.01,
                  hunting_expire_bars: int = 15,
@@ -61,7 +61,7 @@ class BidirectionalAgentBacktester:
                  slippage: float = 0.0002):
         
         logger.info("="*80)
-        logger.info("INITIALIZING BIDIRECTIONAL AGENT - DYNAMIC FEATURE VERSION")
+        logger.info("INITIALIZING BIDIRECTIONAL AGENT - CALIBRATED PROBABILITY VERSION")
         logger.info("="*80)
         
         # 載入模型
@@ -69,27 +69,23 @@ class BidirectionalAgentBacktester:
         self.model_long = joblib.load(model_long_path)
         self.model_short = joblib.load(model_short_path)
         
-        # [核心修復] 從模型直接讀取訓練時用的特徵名稱
+        # 從模型讀取特徵名稱
         try:
-            # CalibratedClassifierCV 需要訪問 base_estimator
             if hasattr(self.model_long, 'estimators_'):
-                # CalibratedClassifierCV 的情況
                 base_model_long = self.model_long.estimators_[0].estimator
                 base_model_short = self.model_short.estimators_[0].estimator
             else:
-                # 直接是 CatBoost 模型
                 base_model_long = self.model_long
                 base_model_short = self.model_short
             
             self.features_long = list(base_model_long.feature_names_)
             self.features_short = list(base_model_short.feature_names_)
             
-            logger.info(f"Long Oracle features: {self.features_long}")
-            logger.info(f"Short Oracle features: {self.features_short}")
+            logger.info(f"Long Oracle features ({len(self.features_long)}): {self.features_long[:5]}...")
+            logger.info(f"Short Oracle features ({len(self.features_short)}): {self.features_short[:5]}...")
             
         except Exception as e:
             logger.error(f"Failed to extract feature names: {str(e)}")
-            # Fallback: 使用預設特徵
             self.features_long = ['efficiency_ratio', 'extreme_time_diff', 'vol_imbalance_ratio',
                                  'z_score', 'bb_width_pct', 'rsi', 'atr_pct', 'z_score_1h', 'atr_pct_1d']
             self.features_short = self.features_long
@@ -134,7 +130,7 @@ class BidirectionalAgentBacktester:
         
         logger.info(f"Initial capital: ${initial_capital:,.2f}")
         logger.info(f"Position size: {position_size_pct*100:.1f}%")
-        logger.info(f"Prob thresholds: Long={prob_threshold_long:.2f}, Short={prob_threshold_short:.2f}")
+        logger.info(f"Prob thresholds: Long={prob_threshold_long:.3f} ({prob_threshold_long/0.05:.1f}x Lift), Short={prob_threshold_short:.3f} ({prob_threshold_short/0.05:.1f}x Lift)")
         logger.info(f"TP/SL: {tp_pct*100:.1f}% / {sl_pct*100:.1f}%")
         logger.info("="*80)
     
@@ -155,13 +151,11 @@ class BidirectionalAgentBacktester:
                      exit_reason: str, entry_time: pd.Timestamp, exit_time: pd.Timestamp,
                      entry_prob: float):
         """執行交易並記錄"""
-        # 計算比例獲利
         if direction == 'LONG':
             pnl_pct = (exit_price - entry_price) / entry_price
         else:
             pnl_pct = (entry_price - exit_price) / entry_price
         
-        # 計算手續費
         trade_value = self.position_size
         entry_fee = self.calculate_fees(trade_value, is_maker=True)
         
@@ -171,15 +165,11 @@ class BidirectionalAgentBacktester:
             exit_fee = self.calculate_fees(trade_value, is_maker=True)
         
         total_fees = entry_fee + exit_fee
-        
-        # 淨利
         gross_pnl = self.position_size * pnl_pct
         net_pnl = gross_pnl - total_fees
         
-        # 更新資金
         self.capital += net_pnl
         
-        # 記錄交易
         trade = Trade(
             entry_time=entry_time,
             entry_price=entry_price,
@@ -194,7 +184,7 @@ class BidirectionalAgentBacktester:
         )
         self.trades.append(trade)
         
-        logger.info(f"TRADE: {direction} | Entry={entry_price:.2f} | Exit={exit_price:.2f} | "
+        logger.info(f"TRADE: {direction} | Entry={entry_price:.2f} @ {entry_time} | Exit={exit_price:.2f} @ {exit_time} | "
                    f"Reason={exit_reason} | PnL={net_pnl:+.2f} ({pnl_pct*100:+.2f}%) | "
                    f"Prob={entry_prob:.3f} | Capital={self.capital:.2f}")
     
@@ -211,21 +201,21 @@ class BidirectionalAgentBacktester:
             if not self.is_trading_hours(timestamp):
                 return
             
-            # 雙向互斥決策 (避免同時做多做空)
-            if prob_long >= self.prob_threshold_long and prob_short < 0.40:
+            # [核心修復] 雙向互斥決策 - 降低反向檢查到 0.10
+            if prob_long >= self.prob_threshold_long and prob_short < 0.10:
                 self.state = AgentState.HUNTING_LONG
                 self.hunting_entry_bar = bar_idx
-                self.limit_order_price = close_price * 0.9995  # 下方 0.05% 接刀
+                self.limit_order_price = close_price * 0.9995
                 self.entry_prob = prob_long
-                logger.info(f"[{timestamp}] IDLE -> HUNTING_LONG | prob={prob_long:.4f} | limit={self.limit_order_price:.2f}")
+                logger.info(f"[{timestamp}] IDLE -> HUNTING_LONG | prob_long={prob_long:.4f}, prob_short={prob_short:.4f} | limit={self.limit_order_price:.2f}")
                 return
             
-            if prob_short >= self.prob_threshold_short and prob_long < 0.40:
+            if prob_short >= self.prob_threshold_short and prob_long < 0.10:
                 self.state = AgentState.HUNTING_SHORT
                 self.hunting_entry_bar = bar_idx
-                self.limit_order_price = close_price * 1.0005  # 上方 0.05% 狙擊
+                self.limit_order_price = close_price * 1.0005
                 self.entry_prob = prob_short
-                logger.info(f"[{timestamp}] IDLE -> HUNTING_SHORT | prob={prob_short:.4f} | limit={self.limit_order_price:.2f}")
+                logger.info(f"[{timestamp}] IDLE -> HUNTING_SHORT | prob_short={prob_short:.4f}, prob_long={prob_long:.4f} | limit={self.limit_order_price:.2f}")
                 return
         
         # === 狀態 2: HUNTING_LONG ===
@@ -237,7 +227,6 @@ class BidirectionalAgentBacktester:
                 self.limit_order_price = None
                 return
             
-            # 悲觀成交 (嚴格小於)
             if low_price < self.limit_order_price:
                 self.state = AgentState.LONG_POSITION
                 self.entry_time = timestamp
@@ -258,7 +247,6 @@ class BidirectionalAgentBacktester:
                 self.limit_order_price = None
                 return
             
-            # 悲觀成交 (嚴格大於)
             if high_price > self.limit_order_price:
                 self.state = AgentState.SHORT_POSITION
                 self.entry_time = timestamp
@@ -276,7 +264,6 @@ class BidirectionalAgentBacktester:
             sl_hit = low_price <= self.sl_price
             
             if tp_hit and sl_hit:
-                # 薛丁格案例: 假設最壞情況
                 self.execute_trade(
                     direction='LONG',
                     entry_price=self.entry_price,
@@ -360,49 +347,77 @@ class BidirectionalAgentBacktester:
                 return
     
     def run(self, df_test: pd.DataFrame, feature_cols: List[str]) -> Dict:
-        """
-        執行回測 - 批次預測版
-        
-        Args:
-            df_test: 測試集 (OHLCV + features)
-            feature_cols: 特徵欄位名稱 (會被忽略,使用模型內建特徵)
-        """
+        """執行回測 - 批次預測版"""
         logger.info("="*80)
-        logger.info("STARTING BIDIRECTIONAL BACKTEST - BATCH PREDICTION MODE")
+        logger.info("STARTING BIDIRECTIONAL BACKTEST - CALIBRATED PROBABILITY MODE")
         logger.info("="*80)
         logger.info(f"Test period: {df_test.index[0]} to {df_test.index[-1]}")
         logger.info(f"Total bars: {len(df_test):,}")
         
-        # [核心修復] 批次預測機率 (避免逐筆報錯)
+        # 批次預測機率
         logger.info("Batch predicting probabilities...")
         
         try:
-            # 提取正確的特徵
+            # 提取特徵
             X_long = df_test[self.features_long].fillna(0).values
             X_short = df_test[self.features_short].fillna(0).values
+            
+            # 檢查 NaN
+            nan_ratio_long = np.isnan(X_long).sum() / X_long.size
+            nan_ratio_short = np.isnan(X_short).sum() / X_short.size
+            
+            if nan_ratio_long > 0.5 or nan_ratio_short > 0.5:
+                logger.warning(f"⚠️ NaN ratio: Long={nan_ratio_long*100:.1f}%, Short={nan_ratio_short*100:.1f}%")
+                logger.warning("特徵可能遺失，模型將成為瞎子")
             
             # 批次預測
             df_test['prob_long'] = self.model_long.predict_proba(X_long)[:, 1]
             df_test['prob_short'] = self.model_short.predict_proba(X_short)[:, 1]
             
-            logger.info(f"Batch prediction completed")
-            logger.info(f"Long prob range: {df_test['prob_long'].min():.3f} - {df_test['prob_long'].max():.3f}")
-            logger.info(f"Short prob range: {df_test['prob_short'].min():.3f} - {df_test['prob_short'].max():.3f}")
+            # [核心 Debug] 機率分布探測器
+            logger.info("="*80)
+            logger.info("🔍 PROBABILITY DISTRIBUTION ANALYSIS")
+            logger.info("="*80)
+            
+            for name, prob_col in [('Long', 'prob_long'), ('Short', 'prob_short')]:
+                probs = df_test[prob_col]
+                logger.info(f"{name} Oracle:")
+                logger.info(f"  Max:        {probs.max():.4f}")
+                logger.info(f"  95th %ile:  {probs.quantile(0.95):.4f}")
+                logger.info(f"  Median:     {probs.median():.4f}")
+                logger.info(f"  Mean:       {probs.mean():.4f}")
+                logger.info(f"  Min:        {probs.min():.4f}")
+                logger.info(f"  > 0.15:     {(probs > 0.15).sum():,} bars ({(probs > 0.15).sum()/len(probs)*100:.2f}%)")
+                logger.info(f"  > 0.20:     {(probs > 0.20).sum():,} bars ({(probs > 0.20).sum()/len(probs)*100:.2f}%)")
+                logger.info(f"  > 0.25:     {(probs > 0.25).sum():,} bars ({(probs > 0.25).sum()/len(probs)*100:.2f}%)")
+            
+            logger.info("="*80)
+            
+            # 檢查是否有足夠的高機率訊號
+            high_prob_long = (df_test['prob_long'] >= self.prob_threshold_long).sum()
+            high_prob_short = (df_test['prob_short'] >= self.prob_threshold_short).sum()
+            
+            logger.info(f"Signals above threshold:")
+            logger.info(f"  Long  >= {self.prob_threshold_long:.3f}: {high_prob_long:,} bars ({high_prob_long/len(df_test)*100:.2f}%)")
+            logger.info(f"  Short >= {self.prob_threshold_short:.3f}: {high_prob_short:,} bars ({high_prob_short/len(df_test)*100:.2f}%)")
+            
+            if high_prob_long == 0 and high_prob_short == 0:
+                logger.warning("⚠️ 沒有任何機率超過閾值的訊號！請降低閾值到 0.10-0.12")
+            
+            logger.info("="*80)
             
         except Exception as e:
             logger.error(f"Batch prediction failed: {str(e)}", exc_info=True)
             return {}
         
-        logger.info("="*80)
-        
         # 逐根 K 線處理
+        logger.info("Starting event-driven loop...")
         for bar_idx, (timestamp, row) in enumerate(df_test.iterrows()):
             prob_long = row['prob_long']
             prob_short = row['prob_short']
             
             self.process_bar(bar_idx, row, prob_long, prob_short)
             
-            # 記錄權益曲線
             self.equity_curve.append({
                 'timestamp': timestamp,
                 'capital': self.capital,
@@ -423,7 +438,8 @@ class BidirectionalAgentBacktester:
     def calculate_metrics(self) -> Dict:
         """計算回測統計指標"""
         if len(self.trades) == 0:
-            logger.warning("No trades executed during backtest")
+            logger.warning("⚠️ No trades executed during backtest")
+            logger.warning("Please check probability distribution above")
             return {'total_trades': 0}
         
         total_trades = len(self.trades)
@@ -477,18 +493,15 @@ class BidirectionalAgentBacktester:
         logger.info(f"Final Capital: ${self.capital:,.2f}")
         logger.info(f"Avg Win: ${avg_win:+.2f} | Avg Loss: ${avg_loss:+.2f}")
         logger.info(f"Profit Factor: {profit_factor:.2f}")
-        logger.info(f"TP Rate: {tp_rate*100:.1f}% ({len(tp_trades)}/{total_trades})")
-        logger.info(f"SL Rate: {sl_rate*100:.1f}% ({len(sl_trades)}/{total_trades})")
+        logger.info(f"TP Rate: {tp_rate*100:.1f}% | SL Rate: {sl_rate*100:.1f}%")
         logger.info("="*80)
         
         return results
     
     def get_equity_curve(self) -> pd.DataFrame:
-        """獲取權益曲線"""
         return pd.DataFrame(self.equity_curve)
     
     def get_trades_df(self) -> pd.DataFrame:
-        """獲取交易記錄"""
         if not self.trades:
             return pd.DataFrame()
         
