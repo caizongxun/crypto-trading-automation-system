@@ -70,32 +70,32 @@ class ModelTrainingTab:
     def render_bidirectional(self):
         """雙向訓練介面"""
         st.markdown("""
-        ### 雙向狩獵架構 - Bidirectional Hunting (高雜訊對抗版)
+        ### 雙向狩獵架構 - 激進抽樣與特徵遮罩版
         
         **核心概念**:
         - Long Oracle: 捕捉底部反轉、W 底、上漲突破
         - Short Oracle: 捕捉頂部背離、M 頭、下跌突破
         
-        **高雜訊對抗三大武器**:
-        - L2 Regularization: 25.0 (強制權重分散)
-        - Bagging Temperature: 2.0 (破解同質性)
-        - Random Strength: 1.5 (防止單一特徵壟斷)
+        **極致解耦雙殺手鐤**:
+        - 激進抽樣 (subsample=0.5): 每棵樹只看 50% 數據
+        - 特徵遮罩 (colsample=0.7): 隨機藏 30% 特徵
+        - 物理意義: 直接切斷滾動視窗的連續性
         
-        **訓練警告**:
-        - 深度 7 + 1500 樹 = 訓練時間 30-60 分鐘 (CPU)
-        - 建議使用 GPU 加速 (10x)
-        - 目標: Long AUC 0.70+, Short AUC 0.71+
+        **訓練特性**:
+        - 前 300 輪: AUC 緩慢上升 (正常現象)
+        - 1000 輪後: 真實實力展現
+        - 目標: Long 0.70+, Short 0.70+
         """)
         
         st.markdown("---")
         
-        if st.button("訓練雙向模型 (Long + Short Oracles) - 硬核版", use_container_width=True):
+        if st.button("訓練雙向模型 - 激進抽樣版", use_container_width=True):
             self.train_bidirectional()
     
     def train_bidirectional(self):
-        """執行雙向訓練 - 高雜訊對抗版"""
+        """執行雙向訓練 - 激進抽樣與特徵遮罩版"""
         logger.info("="*80)
-        logger.info("BIDIRECTIONAL TRAINING - HARDCORE ANTI-NOISE VERSION")
+        logger.info("BIDIRECTIONAL TRAINING - ULTIMATE DECOUPLING VERSION")
         logger.info("="*80)
         
         # Step 1: 載入 1m 數據
@@ -168,44 +168,51 @@ class ModelTrainingTab:
         tscv = TimeSeriesSplit(n_splits=5, gap=240)
         logger.info("TimeSeriesSplit configured: n_splits=5, gap=240 (4 hours)")
         
-        # Step 5: 訓練 Long Oracle - 硬核版
+        # Step 5: 訓練 Long Oracle - 激進抽樣版
         st.markdown("---")
-        st.subheader("訓練 Long Oracle - 高雜訊對抗版")
-        st.warning("訓練時間: 30-60 分鐘 (CPU) / 3-6 分鐘 (GPU)")
+        st.subheader("訓練 Long Oracle - 激進抽樣版")
+        st.warning("訓練時間: 40-80 分鐘 (CPU) / 4-8 分鐘 (GPU)")
+        st.info("前 300 輪 AUC 會緩慢上升,請耐心等候")
         
-        with st.spinner("訓練 Long 模型中... (這會花一些時間)"):
+        with st.spinner("訓練 Long 模型中... (請耐心等候)"):
             # 動態計算 scale_pos_weight
             pos_rate_long = y_long_train.mean()
             scale_pos_weight_long = (1 - pos_rate_long) / pos_rate_long if pos_rate_long > 0 else 1.0
             
             logger.info("="*80)
-            logger.info("HARDCORE PARAMETER CONFIG - LONG ORACLE")
+            logger.info("ULTIMATE DECOUPLING CONFIG - LONG ORACLE")
             logger.info("="*80)
             logger.info(f"Positive rate: {pos_rate_long*100:.2f}%")
             logger.info(f"Scale pos weight: {scale_pos_weight_long:.2f}")
-            logger.info(f"Iterations: 1500")
-            logger.info(f"Learning rate: 0.03")
-            logger.info(f"Depth: 7")
-            logger.info(f"L2 leaf reg: 25.0 (HIGH REGULARIZATION)")
-            logger.info(f"Bagging temperature: 2.0 (HIGH DIVERSITY)")
-            logger.info(f"Random strength: 1.5 (ANTI-DOMINANCE)")
+            logger.info(f"Iterations: 2000")
+            logger.info(f"Learning rate: 0.02 (micro-carving)")
+            logger.info(f"Depth: 6 (prevent local noise)")
+            logger.info(f"L2 leaf reg: 10.0 (balanced regularization)")
+            logger.info(f"Bootstrap: Bernoulli + subsample=0.5 (BREAK ROLLING OVERLAP)")
+            logger.info(f"Colsample: 0.7 (PREVENT FEATURE MONOPOLY)")
             logger.info("="*80)
             
             st.info(f"Long scale_pos_weight: {scale_pos_weight_long:.2f}")
             
-            # 硬核版參數配置
+            # 激進抽樣版參數配置
             model_long = CatBoostClassifier(
-                # 1. 深度與廣度學習
-                iterations=1500,
-                learning_rate=0.03,
-                depth=7,
+                # 1. 訓練節奏放緩,讓子彈飛一會兒
+                iterations=2000,
+                learning_rate=0.02,
+                depth=6,
                 
-                # 2. 對抗滾動重疊的「三大核心武器」
-                l2_leaf_reg=25.0,           # 極度關鍵: 大幅拉高 L2 正則化
-                bagging_temperature=2.0,    # 極度關鍵: 貝葉斯抽樣溫度
-                random_strength=1.5,        # 增加特徵分裂隨機分數
+                # 2. 取消極端懲罰,回歸平衡
+                l2_leaf_reg=10.0,
+                random_strength=1.0,
                 
-                # 3. 基礎配置
+                # 3. [殺手鐤] 激進資料抽樣 (打破時間連續性)
+                bootstrap_type='Bernoulli',
+                subsample=0.5,              # 每棵樹只隨機看 50% 的資料
+                
+                # 4. [殺手鐤] 特徵遮罩 (防止單一指標霸槜)
+                colsample_bylevel=0.7,      # 每次樹節點分裂時,隨機藏起 30% 的特徵
+                
+                # 5. 基礎配置
                 scale_pos_weight=float(scale_pos_weight_long),
                 loss_function='Logloss',
                 eval_metric='AUC',
@@ -230,18 +237,19 @@ class ModelTrainingTab:
             logger.info(f"Long Oracle OOS AUC: {auc_long:.4f}")
             st.success(f"Long Oracle 訓練完成 - AUC: {auc_long:.4f}")
         
-        # Step 6: 訓練 Short Oracle - 硬核版
+        # Step 6: 訓練 Short Oracle - 激進抽樣版
         st.markdown("---")
-        st.subheader("訓練 Short Oracle - 高雜訊對抗版")
-        st.warning("訓練時間: 30-60 分鐘 (CPU) / 3-6 分鐘 (GPU)")
+        st.subheader("訓練 Short Oracle - 激進抽樣版")
+        st.warning("訓練時間: 40-80 分鐘 (CPU) / 4-8 分鐘 (GPU)")
+        st.info("前 300 輪 AUC 會緩慢上升,請耐心等候")
         
-        with st.spinner("訓練 Short 模型中... (這會花一些時間)"):
+        with st.spinner("訓練 Short 模型中... (請耐心等候)"):
             # 動態計算 scale_pos_weight
             pos_rate_short = y_short_train.mean()
             scale_pos_weight_short = (1 - pos_rate_short) / pos_rate_short if pos_rate_short > 0 else 1.0
             
             logger.info("="*80)
-            logger.info("HARDCORE PARAMETER CONFIG - SHORT ORACLE")
+            logger.info("ULTIMATE DECOUPLING CONFIG - SHORT ORACLE")
             logger.info("="*80)
             logger.info(f"Positive rate: {pos_rate_short*100:.2f}%")
             logger.info(f"Scale pos weight: {scale_pos_weight_short:.2f}")
@@ -249,19 +257,25 @@ class ModelTrainingTab:
             
             st.info(f"Short scale_pos_weight: {scale_pos_weight_short:.2f}")
             
-            # 硬核版參數配置
+            # 激進抽樣版參數配置
             model_short = CatBoostClassifier(
-                # 1. 深度與廣度學習
-                iterations=1500,
-                learning_rate=0.03,
-                depth=7,
+                # 1. 訓練節奏放緩
+                iterations=2000,
+                learning_rate=0.02,
+                depth=6,
                 
-                # 2. 對抗滾動重疊的「三大核心武器」
-                l2_leaf_reg=25.0,
-                bagging_temperature=2.0,
-                random_strength=1.5,
+                # 2. 平衡懲罰
+                l2_leaf_reg=10.0,
+                random_strength=1.0,
                 
-                # 3. 基礎配置
+                # 3. 激進抽樣
+                bootstrap_type='Bernoulli',
+                subsample=0.5,
+                
+                # 4. 特徵遮罩
+                colsample_bylevel=0.7,
+                
+                # 5. 基礎配置
                 scale_pos_weight=float(scale_pos_weight_short),
                 loss_function='Logloss',
                 eval_metric='AUC',
@@ -311,8 +325,8 @@ class ModelTrainingTab:
         
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         
-        long_model_path = models_dir / f'catboost_long_hardcore_{timestamp}.pkl'
-        short_model_path = models_dir / f'catboost_short_hardcore_{timestamp}.pkl'
+        long_model_path = models_dir / f'catboost_long_decoupled_{timestamp}.pkl'
+        short_model_path = models_dir / f'catboost_short_decoupled_{timestamp}.pkl'
         
         joblib.dump(model_long_calibrated, long_model_path)
         joblib.dump(model_short_calibrated, short_model_path)
@@ -322,7 +336,7 @@ class ModelTrainingTab:
         
         # Step 9: 綜合報告
         st.markdown("---")
-        st.subheader("雙向模型績效 (硬核版)")
+        st.subheader("雙向模型績效 (激進抽樣版)")
         
         col1, col2 = st.columns(2)
         
@@ -353,16 +367,18 @@ class ModelTrainingTab:
         # 保存報告
         report = {
             'timestamp': timestamp,
-            'version': 'hardcore_anti_noise',
+            'version': 'ultimate_decoupling',
             'architecture': 'rolling_window',
             'calibration_method': 'isotonic_with_tscv',
             'parameters': {
-                'iterations': 1500,
-                'learning_rate': 0.03,
-                'depth': 7,
-                'l2_leaf_reg': 25.0,
-                'bagging_temperature': 2.0,
-                'random_strength': 1.5
+                'iterations': 2000,
+                'learning_rate': 0.02,
+                'depth': 6,
+                'l2_leaf_reg': 10.0,
+                'random_strength': 1.0,
+                'bootstrap_type': 'Bernoulli',
+                'subsample': 0.5,
+                'colsample_bylevel': 0.7
             },
             'features': available_features,
             'total_samples': len(df_features),
@@ -388,14 +404,14 @@ class ModelTrainingTab:
             }
         }
         
-        report_path = models_dir / f'bidirectional_hardcore_report_{timestamp}.json'
+        report_path = models_dir / f'bidirectional_decoupled_report_{timestamp}.json'
         with open(report_path, 'w') as f:
             json.dump(report, f, indent=4)
         
         st.info(f"訓練報告: {report_path.name}")
         
         logger.info("="*80)
-        logger.info(f"HARDCORE TRAINING COMPLETED")
+        logger.info(f"ULTIMATE DECOUPLING TRAINING COMPLETED")
         logger.info(f"Long AUC: {auc_long:.4f} (Target: 0.70+)")
         logger.info(f"Short AUC: {auc_short:.4f} (Target: 0.70+)")
         logger.info("="*80)
