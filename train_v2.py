@@ -33,6 +33,46 @@ from utils.agent_backtester import BidirectionalAgentBacktester
 
 logger = setup_logger('train_v2', 'logs/train_v2.log')
 
+def save_model_with_metadata(model, feature_names: list, model_type: str, 
+                             version: str, output_dir: Path) -> Path:
+    """
+    儲存模型時包含完整 metadata
+    
+    Args:
+        model: 訓練好的模型
+        feature_names: 特徵名稱列表
+        model_type: 'long' or 'short'
+        version: 版本標記 (e.g., 'v2')
+        output_dir: 輸出目錄
+    
+    Returns:
+        Path: 儲存的檔案路徑
+    """
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    
+    # 包裝成 dict
+    model_data = {
+        'model': model,
+        'feature_names': feature_names,
+        'version': version,
+        'timestamp': timestamp,
+        'metadata': {
+            'n_features': len(feature_names),
+            'model_type': model_type,
+            'training_date': datetime.now().isoformat()
+        }
+    }
+    
+    filename = output_dir / f"catboost_{model_type}_{version}_{timestamp}.pkl"
+    
+    joblib.dump(model_data, filename)
+    
+    logger.info(f"✅ Model saved with metadata: {filename}")
+    logger.info(f"   Version: {version}")
+    logger.info(f"   Features ({len(feature_names)}): {feature_names[:5]}... (showing first 5)")
+    
+    return filename
+
 class AdvancedTrainer:
     """
     進階訓練器 - 整合所有優化方案
@@ -411,6 +451,7 @@ class AdvancedTrainer:
         
         feature_cols = self.feature_engineer.get_feature_list()
         logger.info(f"\nTotal features: {len(feature_cols)}")
+        logger.info(f"Feature list: {feature_cols}")
         
         # 4. 準備訓練數據
         X_train = df_train[feature_cols].fillna(0).values
@@ -474,25 +515,38 @@ class AdvancedTrainer:
         # 10. Walk-Forward 驗證
         wf_results = self.walk_forward_validation(df_features)
         
-        # 11. 保存模型
+        # 11. 保存模型 (使用新的 save_model_with_metadata 函數)
         output_dir = Path("models_output")
         output_dir.mkdir(exist_ok=True)
         
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        
-        long_path = output_dir / f"catboost_long_v2_{timestamp}.pkl"
-        short_path = output_dir / f"catboost_short_v2_{timestamp}.pkl"
-        
-        joblib.dump(model_long, long_path)
-        joblib.dump(model_short, short_path)
-        
         logger.info("\n" + "="*80)
-        logger.info("MODELS SAVED")
+        logger.info("SAVING MODELS WITH METADATA")
+        logger.info("="*80)
+        
+        long_path = save_model_with_metadata(
+            model=model_long,
+            feature_names=feature_cols,
+            model_type='long',
+            version='v2',
+            output_dir=output_dir
+        )
+        
+        short_path = save_model_with_metadata(
+            model=model_short,
+            feature_names=feature_cols,
+            model_type='short',
+            version='v2',
+            output_dir=output_dir
+        )
+        
+        logger.info("="*80)
+        logger.info("MODELS SAVED SUCCESSFULLY")
         logger.info("="*80)
         logger.info(f"Long Oracle:  {long_path}")
         logger.info(f"Short Oracle: {short_path}")
         
-        # 12. 保存特徵列表
+        # 12. 保存特徵列表 (額外備份)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         features_path = output_dir / f"features_v2_{timestamp}.txt"
         with open(features_path, 'w') as f:
             for feat in feature_cols:
@@ -508,7 +562,8 @@ class AdvancedTrainer:
             'eval_short': eval_short,
             'walk_forward': wf_results,
             'long_path': long_path,
-            'short_path': short_path
+            'short_path': short_path,
+            'feature_cols': feature_cols
         }
 
 if __name__ == "__main__":
@@ -528,4 +583,5 @@ if __name__ == "__main__":
     print(f"Short Oracle: {results['short_path']}")
     print(f"Long AUC:     {results['eval_long']['auc']:.4f}")
     print(f"Short AUC:    {results['eval_short']['auc']:.4f}")
+    print(f"Features:     {len(results['feature_cols'])}")
     print("="*80)
