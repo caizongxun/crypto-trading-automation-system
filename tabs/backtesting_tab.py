@@ -42,32 +42,32 @@ class BacktestingTab:
     
     def render(self):
         logger.info("Rendering Backtesting Tab")
-        st.header("📊 策略回測 - 多維度優化系統")
+        st.header("策略回測 - 多維度優化系統")
         
         # 檢查 V2 狀態
         if V2_AVAILABLE:
-            st.success("✅ V2 系統已啟用 - 支持 V1 和 V2 模型")
+            st.success("V2 系統已啟用 - 支持 V1 和 V2 模型")
         else:
-            st.info("🔵 當前僅支持 V1 模型")
+            st.info("當前僅支持 V1 模型")
         
         st.markdown("---")
         
         # 回測引擎選擇
-        st.markdown("### 🛠️ 回測引擎選擇")
+        st.markdown("### 回測引擎選擇")
         
         backtest_engine = st.radio(
             "選擇回測引擎",
             ['standard', 'adaptive'],
-            format_func=lambda x: '🔵 標準雙向智能體' if x == 'standard' else '🌟 進階自適應智能體 (推薦)',
+            format_func=lambda x: '標準雙向智能體' if x == 'standard' else '進階自適應智能體 (推薦)',
             horizontal=True,
             key="backtest_engine"
         )
         
         if backtest_engine == 'standard':
-            st.info("👉 標準引擎: 固定參數回測,適合建立基線")
+            st.info("標準引擎: 固定參數回測,適合建立基線")
             self.render_standard_backtest()
         else:
-            st.success("👉 自適應引擎: 動態參數調整,根據市場狀態優化")
+            st.success("自適應引擎: 動態參數調整,根據市場狀態優化")
             self.render_adaptive_backtest()
     
     def load_klines(self, symbol: str, timeframe: str) -> pd.DataFrame:
@@ -112,7 +112,7 @@ class BacktestingTab:
         if V2_AVAILABLE and v2_models:
             version_choice = st.radio(
                 f"{direction.upper()} 模型版本",
-                options=["🔶 V2 (推薦)", "🔵 V1"],
+                options=["V2 (推薦)", "V1"],
                 index=0,
                 key=f"{prefix}_{direction}_version",
                 horizontal=True
@@ -122,7 +122,7 @@ class BacktestingTab:
         else:
             use_v2 = False
             if V2_AVAILABLE:
-                st.info(f"ℹ️ 沒有 {direction.upper()} V2 模型,使用 V1")
+                st.info(f"沒有 {direction.upper()} V2 模型,使用 V1")
         
         # 選擇模型
         if use_v2:
@@ -150,7 +150,7 @@ class BacktestingTab:
     
     def render_standard_backtest(self):
         st.markdown("---")
-        st.subheader("⚙️ 標準回測配置")
+        st.subheader("標準回測配置")
         
         # 模型選擇
         models_dir = Path("models_output")
@@ -172,20 +172,20 @@ class BacktestingTab:
         
         # 版本一致性檢查
         if long_version != short_version:
-            st.warning("⚠️ Long 和Short 模型版本不一致,建議使用相同版本")
+            st.warning("Long 和 Short 模型版本不一致,建議使用相同版本")
         
         model_version = long_version  # 使用 long 的版本
         
         # 顯示版本資訊
         if model_version == 'v2':
-            st.success("✅ 使用 V2 特徵工程 (44-54 個特徵)")
+            st.success("使用 V2 特徵工程 (44-54 個特徵)")
         else:
-            st.info("🔵 使用 V1 特徵工程 (9 個特徵)")
+            st.info("使用 V1 特徵工程 (9 個特徵)")
         
         st.markdown("---")
         
         # 回測參數
-        st.markdown("#### 💰 資金管理")
+        st.markdown("#### 資金管理")
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
@@ -227,7 +227,7 @@ class BacktestingTab:
                 key="std_sl"
             ) / 100
         
-        st.markdown("#### 🎯 閾值設定")
+        st.markdown("#### 閾值設定")
         col1, col2 = st.columns(2)
         
         with col1:
@@ -252,11 +252,11 @@ class BacktestingTab:
             )
         
         st.info(
-            f"💡 機率解讀: {prob_threshold_long:.2f} = {prob_threshold_long/0.05:.1f}x Lift (基礎勝率 5%)"
+            f"機率解讀: {prob_threshold_long:.2f} = {prob_threshold_long/0.05:.1f}x Lift (基礎勝率 5%)"
         )
         
         # 交易時段
-        st.markdown("#### 🕒 交易時段")
+        st.markdown("#### 交易時段")
         use_24_7 = st.checkbox(
             "24/7 交易",
             value=False,
@@ -268,7 +268,7 @@ class BacktestingTab:
         
         st.markdown("---")
         
-        if st.button("🚀 執行標準回測", use_container_width=True, type="primary", key="std_run"):
+        if st.button("執行標準回測", use_container_width=True, type="primary", key="std_run"):
             self.run_standard_backtest(
                 long_model_path=models_dir / selected_long_model,
                 short_model_path=models_dir / selected_short_model,
@@ -284,7 +284,7 @@ class BacktestingTab:
     
     def render_adaptive_backtest(self):
         st.markdown("---")
-        st.subheader("⚙️ 自適應回測配置")
+        st.subheader("自適應回測配置")
         
         # 模型選擇 - 同標準回測
         models_dir = Path("models_output")
@@ -307,14 +307,14 @@ class BacktestingTab:
         model_version = long_version
         
         if model_version == 'v2':
-            st.success("✅ 使用 V2 特徵工程")
+            st.success("使用 V2 特徵工程")
         else:
-            st.info("🔵 使用 V1 特徵工程")
+            st.info("使用 V1 特徵工程")
         
         st.markdown("---")
         
         # 基礎參數
-        st.markdown("#### 💰 基礎參數")
+        st.markdown("#### 基礎參數")
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
@@ -362,12 +362,12 @@ class BacktestingTab:
         st.markdown("---")
         
         # 自適應功能
-        st.markdown("#### 🧠 自適應功能開關")
+        st.markdown("#### 自適應功能開關")
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
             enable_vol_adapt = st.checkbox(
-                "📊 波動率自適應",
+                "波動率自適應",
                 value=True,
                 key="adp_vol",
                 help="根據 ATR 動態調整 TP/SL"
@@ -375,7 +375,7 @@ class BacktestingTab:
         
         with col2:
             enable_prob_layer = st.checkbox(
-                "🎯 機率分層倉位",
+                "機率分層倉位",
                 value=True,
                 key="adp_prob",
                 help="高機率時加大倉位"
@@ -383,7 +383,7 @@ class BacktestingTab:
         
         with col3:
             enable_time_based = st.checkbox(
-                "🕒 時段差異化",
+                "時段差異化",
                 value=True,
                 key="adp_time",
                 help="不同時段不同策略"
@@ -391,7 +391,7 @@ class BacktestingTab:
         
         with col4:
             enable_risk_ctrl = st.checkbox(
-                "🛡️ 風控強化",
+                "風控強化",
                 value=True,
                 key="adp_risk",
                 help="日內虧損限制 + 連續停損保護"
@@ -399,7 +399,7 @@ class BacktestingTab:
         
         # 風控參數
         if enable_risk_ctrl:
-            st.markdown("#### 🛡️ 風控參數")
+            st.markdown("#### 風控參數")
             col1, col2 = st.columns(2)
             
             with col1:
@@ -424,7 +424,7 @@ class BacktestingTab:
             max_consec_loss = 10
         
         # 交易時段
-        st.markdown("#### 🕒 交易時段")
+        st.markdown("#### 交易時段")
         use_24_7 = st.checkbox(
             "24/7 交易",
             value=False,
@@ -435,7 +435,7 @@ class BacktestingTab:
         
         st.markdown("---")
         
-        if st.button("🚀 執行自適應回測", use_container_width=True, type="primary", key="adp_run"):
+        if st.button("執行自適應回測", use_container_width=True, type="primary", key="adp_run"):
             self.run_adaptive_backtest(
                 long_model_path=models_dir / selected_long_model,
                 short_model_path=models_dir / selected_short_model,
@@ -457,7 +457,7 @@ class BacktestingTab:
     def run_standard_backtest(self, model_version='v1', **params):
         logger.info(f"Starting standard backtest with {model_version} features")
         
-        with st.spinner("📥 載入 1m K線..."):
+        with st.spinner("載入 1m K線..."):
             df_1m = self.load_klines("BTCUSDT", "1m")
             if df_1m.empty:
                 st.error("無法載入數據")
@@ -469,14 +469,14 @@ class BacktestingTab:
         
         # 根據版本選擇 feature engineer
         if model_version == 'v2' and V2_AVAILABLE:
-            with st.spinner("🔶 生成 V2 特徵 (44-54個)..."):
+            with st.spinner("生成 V2 特徵 (44-54個)..."):
                 df_features = self.feature_engineer_v2.create_features_from_1m(
                     df_1m, 
                     use_adaptive_labels=True, 
                     label_type='both'
                 )
         else:
-            with st.spinner("🔵 生成 V1 特徵 (9個)..."):
+            with st.spinner("生成 V1 特徵 (9個)..."):
                 df_features = self.feature_engineer_v1.create_features_from_1m(
                     df_1m, use_micro_structure=True, label_type='both'
                 )
@@ -484,9 +484,9 @@ class BacktestingTab:
         split_idx = int(len(df_features) * 0.8)
         df_test = df_features.iloc[split_idx:].copy()
         
-        st.info(f"📊 測試集: {len(df_test):,} 筆 | 版本: {model_version.upper()}")
+        st.info(f"測試集: {len(df_test):,} 筆 | 版本: {model_version.upper()}")
         
-        with st.spinner("🚀 執行回測..."):
+        with st.spinner("執行回測..."):
             backtester = BidirectionalAgentBacktester(
                 model_long_path=str(params['long_model_path']),
                 model_short_path=str(params['short_model_path']),
@@ -507,7 +507,7 @@ class BacktestingTab:
                     params['short_model_path'], model_version
                 )
             else:
-                st.warning("⚠️ 沒有交易。請檢查 logs/agent_backtester.log")
+                st.warning("沒有交易。請檢查 logs/agent_backtester.log")
     
     def run_adaptive_backtest(self, model_version='v1', **params):
         logger.info(f"Starting adaptive backtest with {model_version} features")
@@ -571,18 +571,18 @@ class BacktestingTab:
     def display_results_with_analysis(self, backtester, results: dict, 
                                      long_model_path, short_model_path,
                                      model_version='v1'):
-        st.success("✅ 回測完成")
+        st.success("回測完成")
         
         # 顯示版本
         if model_version == 'v2':
-            st.info("🔶 本次回測使用 V2 特徵 (44-54個)")
+            st.info("本次回測使用 V2 特徵 (44-54個)")
         else:
-            st.info("🔵 本次回測使用 V1 特徵 (9個)")
+            st.info("本次回測使用 V1 特徵 (9個)")
         
         st.markdown("---")
         
         # 基本指標
-        st.markdown("### 🏆 核心指標")
+        st.markdown("### 核心指標")
         col1, col2, col3, col4, col5 = st.columns(5)
         
         with col1:
@@ -606,14 +606,14 @@ class BacktestingTab:
         
         # 統計顯著性檢查
         if results['total_trades'] < 30:
-            st.warning("⚠️ 樣本數不足 (<30), 統計不顯著! 請降低閾值增加交易數量")
+            st.warning("樣本數不足 (<30), 統計不顯著! 請降低閾值增加交易數量")
         else:
-            st.success("✅ 樣本數充足, 統計顯著")
+            st.success("樣本數充足, 統計顯著")
         
         st.markdown("---")
         
         # 執行完整診斷分析
-        st.markdown("### 🔍 診斷分析報告")
+        st.markdown("### 診斷分析報告")
         
         with st.spinner("生成診斷分析..."):
             trades_df = backtester.get_trades_df()
@@ -629,14 +629,14 @@ class BacktestingTab:
             analysis_results = analyzer.analyze_all()
             
             # 顯示優化建議
-            st.markdown("#### 💡 優化建議")
+            st.markdown("#### 優化建議")
             recommendations = analysis_results.get('recommendations', [])
             if recommendations:
                 for i, rec in enumerate(recommendations, 1):
                     st.info(f"{i}. {rec}")
             
             # 顯示時段分析
-            st.markdown("#### 🕒 時段績效分析")
+            st.markdown("#### 時段績效分析")
             hourly = analysis_results.get('hourly_performance', pd.DataFrame())
             if not hourly.empty:
                 fig = go.Figure()
@@ -650,7 +650,7 @@ class BacktestingTab:
                 st.plotly_chart(fig, use_container_width=True)
             
             # 顯示機率分層
-            st.markdown("#### 🎯 機率分層分析")
+            st.markdown("#### 機率分層分析")
             layers = analysis_results.get('probability_layers', pd.DataFrame())
             if not layers.empty:
                 st.dataframe(layers, use_container_width=True)
@@ -664,14 +664,14 @@ class BacktestingTab:
             
             analyzer.generate_html_report(html_path)
             
-            st.success(f"✅ 完整診斷報告已保存: {html_path}")
+            st.success(f"完整診斷報告已保存: {html_path}")
             
             # 下載按鈕
             col1, col2 = st.columns(2)
             with col1:
                 trades_csv = trades_df.to_csv(index=False)
                 st.download_button(
-                    "💾 下載交易記錄 CSV",
+                    "下載交易記錄 CSV",
                     trades_csv,
                     f"trades_{model_version}_{timestamp}.csv",
                     "text/csv"
@@ -681,7 +681,7 @@ class BacktestingTab:
                 with open(html_path, 'r', encoding='utf-8') as f:
                     html_content = f.read()
                 st.download_button(
-                    "📊 下載診斷報告 HTML",
+                    "下載診斷報告 HTML",
                     html_content,
                     f"report_{model_version}_{timestamp}.html",
                     "text/html"
