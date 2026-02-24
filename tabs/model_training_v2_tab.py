@@ -3,429 +3,482 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 import sys
-import plotly.graph_objects as go
-import plotly.express as px
+import subprocess
+import time
+import json
 from datetime import datetime
-import threading
-import queue
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 sys.path.append(str(Path(__file__).parent.parent))
-
 from config import Config
 from utils.logger import setup_logger
 
 try:
-    from train_v2 import AdvancedTrainer
+    from utils.feature_engineering_v2 import FeatureEngineerV2
+    from huggingface_hub import hf_hub_download
+    import catboost
     V2_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     V2_AVAILABLE = False
+    IMPORT_ERROR = str(e)
 
 logger = setup_logger('model_training_v2_tab', 'logs/model_training_v2_tab.log')
 
 class ModelTrainingV2Tab:
-    """
-    V2 模型訓練標籤頁
-    """
-    
     def __init__(self):
-        if 'training_status' not in st.session_state:
-            st.session_state.training_status = 'idle'
-        if 'training_results' not in st.session_state:
-            st.session_state.training_results = None
-        if 'training_logs' not in st.session_state:
-            st.session_state.training_logs = []
+        logger.info("Initializing ModelTrainingV2Tab")
+        if V2_AVAILABLE:
+            self.feature_engineer = FeatureEngineerV2(
+                enable_advanced_features=True,
+                enable_ml_features=True
+            )
     
     def render(self):
-        st.header("🧠 V2 模型訓練 (進階版)")
+        logger.info("Rendering Model Training V2 Tab")
+        st.header("V2 模型訓練 - 進階特徵系統")
         
+        # 檢查依賴
         if not V2_AVAILABLE:
-            st.error("⚠️ V2 系統未安裝")
-            st.info("請執行: python upgrade_to_v2.py")
+            st.error(f"V2 系統不可用: {IMPORT_ERROR}")
+            st.info("請執行: pip install optuna")
             return
         
-        # 左右分欄
-        col1, col2 = st.columns([1, 2])
-        
-        with col1:
-            self.render_config_panel()
-        
-        with col2:
-            self.render_results_panel()
-    
-    def render_config_panel(self):
-        """配置面板"""
-        st.subheader("⚙️ 訓練配置")
-        
-        # 訓練模式
-        training_mode = st.radio(
-            "🎯 訓練模式",
-            options=[
-                "🚀 快速測試 (30-60分鐘)",
-                "🏆 完整訓練 (2-4小時)",
-                "💡 自定義"
-            ],
-            index=0,
-            help="快速測試不含超參優化,適合初步驗證"
-        )
-        
+        st.success("V2 系統已就緒")
         st.markdown("---")
         
-        # 根據模式顯示不同配置
-        if training_mode == "🚀 快速測試 (30-60分鐘)":
-            st.info("👍 快速模式配置")
-            st.markdown("""
-            - 超參優化: 關閉
-            - 集成學習: 啟用
-            - Walk-Forward: 關閉
-            - 預計時間: 30-60分鐘
-            """)
-            
-            enable_hyperopt = False
-            enable_ensemble = True
-            enable_walk_forward = False
-            n_trials = 0
+        # 訓練模式選擇
+        st.subheader("訓練模式")
         
-        elif training_mode == "🏆 完整訓練 (2-4小時)":
-            st.success("🌟 完整模式配置")
-            st.markdown("""
-            - 超參優化: 啟用 (50 trials)
-            - 集成學習: 啟用
-            - Walk-Forward: 啟用 (5-fold)
-            - 預計時間: 2-4小時
-            """)
-            
-            enable_hyperopt = True
-            enable_ensemble = True
-            enable_walk_forward = True
-            n_trials = 50
+        training_mode = st.radio(
+            "選擇訓練模式",
+            options=['quick_test', 'full_training', 'custom'],
+            format_func=lambda x: {
+                'quick_test': '快速測試 (30-60分鐘)',
+                'full_training': '完整訓練 (2-4小時)',
+                'custom': '自定義配置'
+            }[x],
+            key="v2_training_mode"
+        )
         
-        else:  # 自定義
-            st.warning("🔧 自定義配置")
-            
-            enable_hyperopt = st.checkbox(
-                "🔍 啟用 Optuna 超參優化",
-                value=True,
-                help="自動搜索最佳參數,需要較長時間"
+        # 模式說明
+        if training_mode == 'quick_test':
+            st.info(
+                "快速測試模式:\n"
+                "- 數據量: 最近 7 天\n"
+                "- Optuna trials: 20\n"
+                "- Walk-Forward: 3 folds\n"
+                "- 適合驗證可行性"
             )
-            
-            if enable_hyperopt:
-                n_trials = st.slider(
-                    "Optuna Trials",
-                    min_value=10,
-                    max_value=100,
-                    value=50,
-                    step=10
-                )
-            else:
-                n_trials = 0
-            
-            enable_ensemble = st.checkbox(
-                "🤝 啟用集成學習",
-                value=True,
-                help="CatBoost + XGBoost 集成"
-            )
-            
-            enable_walk_forward = st.checkbox(
-                "📊 啟用 Walk-Forward 驗證",
-                value=True,
-                help="5-fold 時序驗證,確保穩定性"
+        elif training_mode == 'full_training':
+            st.info(
+                "完整訓練模式:\n"
+                "- 數據量: 全部數據\n"
+                "- Optuna trials: 50\n"
+                "- Walk-Forward: 5 folds\n"
+                "- 適合正式部署"
             )
         
         st.markdown("---")
         
         # 特徵配置
-        st.subheader("🎁 特徵配置")
+        st.subheader("特徵配置")
         
-        enable_advanced = st.checkbox(
-            "🚀 啟用進階特徵",
-            value=True,
-            help="包含微觀結構 + MTF (额外 25 個特徵)"
-        )
+        col1, col2 = st.columns(2)
         
-        enable_ml = st.checkbox(
-            "🧠 啟用 ML 特徵",
-            value=True,
-            help="包含特徵交互 + 聚類 (额外 10 個特徵)"
-        )
+        with col1:
+            enable_advanced = st.checkbox(
+                "啟用進階特徵 (25個)",
+                value=True,
+                key="v2_advanced",
+                help="包含: 微觀結構 + 多時間框架特徵"
+            )
         
-        total_features = 19  # 基礎 + 訂單流
+        with col2:
+            enable_ml = st.checkbox(
+                "啟用 ML 特徵 (10個)",
+                value=True,
+                key="v2_ml",
+                help="包含: 特徵交互 + 聚類 + 統計特徵"
+            )
+        
+        # 計算總特徵數
+        base_features = 9 + 10  # 基礎 + 訂單流
+        total_features = base_features
         if enable_advanced:
             total_features += 25
         if enable_ml:
             total_features += 10
         
-        st.info(f"📊 預計特徵數: **{total_features}** 個")
+        st.info(f"預計生成 {total_features} 個特徵")
         
         st.markdown("---")
         
-        # 開始訓練按鈕
-        if st.session_state.training_status == 'idle':
-            if st.button("🚀 開始訓練", type="primary", use_container_width=True):
-                self.start_training(
-                    enable_hyperopt=enable_hyperopt,
-                    enable_ensemble=enable_ensemble,
-                    enable_walk_forward=enable_walk_forward,
-                    n_trials=n_trials,
-                    enable_advanced=enable_advanced,
-                    enable_ml=enable_ml
-                )
-        
-        elif st.session_state.training_status == 'running':
-            st.warning("⏳ 訓練進行中...")
-            if st.button("⛔ 停止訓練", use_container_width=True):
-                st.session_state.training_status = 'stopped'
-                st.rerun()
-        
-        elif st.session_state.training_status == 'completed':
-            st.success("✅ 訓練完成!")
-            if st.button("🔄 重新訓練", use_container_width=True):
-                st.session_state.training_status = 'idle'
-                st.session_state.training_results = None
-                st.session_state.training_logs = []
-                st.rerun()
-    
-    def render_results_panel(self):
-        """結果面板"""
-        
-        if st.session_state.training_status == 'idle':
-            st.info("👈 請在左側配置並開始訓練")
+        # 自定義配置
+        if training_mode == 'custom':
+            st.subheader("自定義參數")
             
-            # 顯示 V2 優勢
-            st.subheader("🌟 V2 系統優勢")
-            
-            col1, col2, col3, col4 = st.columns(4)
+            col1, col2, col3 = st.columns(3)
             
             with col1:
-                st.metric(
-                    "特徵數",
-                    "44-54",
-                    "+388%",
-                    help="V1: 9 個"
+                data_days = st.number_input(
+                    "數據天數",
+                    min_value=1,
+                    max_value=365,
+                    value=30,
+                    key="v2_data_days"
                 )
             
             with col2:
-                st.metric(
-                    "交易數",
-                    "80-120",
-                    "+116%",
-                    help="V1: 37 筆"
+                optuna_trials = st.number_input(
+                    "Optuna Trials",
+                    min_value=10,
+                    max_value=100,
+                    value=30,
+                    key="v2_optuna_trials"
                 )
             
             with col3:
-                st.metric(
-                    "勝率",
-                    "42-48%",
-                    "+11%",
-                    help="V1: 37.84%"
+                wf_folds = st.number_input(
+                    "Walk-Forward Folds",
+                    min_value=2,
+                    max_value=10,
+                    value=4,
+                    key="v2_wf_folds"
                 )
-            
-            with col4:
-                st.metric(
-                    "Profit Factor",
-                    "1.45-1.65",
-                    "+19%",
-                    help="V1: 1.22"
-                )
-            
-            st.markdown("---")
-            
-            # 特徵對比表
-            st.subheader("📊 特徵對比")
-            
-            comparison_df = pd.DataFrame({
-                '特徵類型': [
-                    '基礎技術指標',
-                    '訂單流特徵',
-                    '微觀結構',
-                    '多時間框架',
-                    'ML衍生特徵'
-                ],
-                'V1': [9, 0, 0, 0, 0],
-                'V2': [9, 10, 10, 15, 10]
-            })
-            
-            fig = go.Figure()
-            fig.add_trace(go.Bar(name='V1', x=comparison_df['特徵類型'], y=comparison_df['V1']))
-            fig.add_trace(go.Bar(name='V2', x=comparison_df['特徵類型'], y=comparison_df['V2']))
-            fig.update_layout(barmode='group', height=300)
-            st.plotly_chart(fig, use_container_width=True)
-            
-            return
+        else:
+            # 自動配置
+            if training_mode == 'quick_test':
+                data_days = 7
+                optuna_trials = 20
+                wf_folds = 3
+            else:  # full_training
+                data_days = 365
+                optuna_trials = 50
+                wf_folds = 5
         
-        elif st.session_state.training_status == 'running':
-            st.subheader("🔄 訓練進度")
+        st.markdown("---")
+        
+        # 訓練按鈕
+        if st.button("開始訓練", use_container_width=True, type="primary", key="v2_start_training"):
+            self.run_training(
+                enable_advanced=enable_advanced,
+                enable_ml=enable_ml,
+                data_days=data_days,
+                optuna_trials=optuna_trials,
+                wf_folds=wf_folds
+            )
+    
+    def load_klines(self, symbol: str, timeframe: str, days: int = None) -> pd.DataFrame:
+        """
+        載入 K 線數據
+        """
+        try:
+            repo_id = Config.HF_REPO_ID
+            base = symbol.replace("USDT", "")
+            filename = f"{base}_{timeframe}.parquet"
+            path_in_repo = f"klines/{symbol}/{filename}"
             
-            # 進度條
+            logger.info(f"Loading {symbol} {timeframe} from HuggingFace")
+            
+            local_path = hf_hub_download(
+                repo_id=repo_id,
+                filename=path_in_repo,
+                repo_type="dataset",
+                token=Config.HF_TOKEN
+            )
+            
+            df = pd.read_parquet(local_path)
+            
+            # 限制天數
+            if days is not None:
+                df = df.tail(days * 1440)  # 1440 = 1天的分鐘數
+            
+            logger.info(f"Loaded {len(df):,} records")
+            return df
+        
+        except Exception as e:
+            logger.error(f"Failed to load data: {str(e)}")
+            st.error(f"載入數據失敗: {str(e)}")
+            return pd.DataFrame()
+    
+    def run_training(self, enable_advanced: bool, enable_ml: bool,
+                    data_days: int, optuna_trials: int, wf_folds: int):
+        """
+        執行完整訓練流程
+        """
+        logger.info("Starting V2 training process")
+        
+        # 創建進度容器
+        progress_container = st.container()
+        
+        with progress_container:
+            st.markdown("### 訓練進度")
+            
+            # 步驟 1: 載入數據
+            st.markdown("**步驟 1/5: 載入數據**")
             progress_bar = st.progress(0)
             status_text = st.empty()
             
-            # 實時日誌
-            st.subheader("📝 實時日誌")
-            log_container = st.container()
+            status_text.text("載入 1m K線...")
+            df_1m = self.load_klines("BTCUSDT", "1m", days=data_days)
             
-            with log_container:
-                if st.session_state.training_logs:
-                    for log in st.session_state.training_logs[-20:]:
-                        st.text(log)
-            
-            return
-        
-        elif st.session_state.training_status == 'completed':
-            results = st.session_state.training_results
-            
-            if results is None:
-                st.error("⚠️ 訓練結果遺失")
+            if df_1m.empty:
+                st.error("數據載入失敗")
                 return
             
-            # 顯示結果
-            self.render_training_results(results)
+            progress_bar.progress(20)
+            status_text.text(f"已載入 {len(df_1m):,} 筆數據")
+            
+            # 步驟 2: 特徵工程
+            st.markdown("**步驟 2/5: 特徵工程**")
+            
+            # 更新特徵配置
+            self.feature_engineer.enable_advanced = enable_advanced
+            self.feature_engineer.enable_ml = enable_ml
+            
+            status_text.text("生成特徵...")
+            
+            if 'open_time' in df_1m.columns:
+                df_1m['open_time'] = pd.to_datetime(df_1m['open_time'])
+                df_1m.set_index('open_time', inplace=True)
+            
+            df_features = self.feature_engineer.create_features_from_1m(
+                df_1m,
+                use_adaptive_labels=True,
+                label_type='both'
+            )
+            
+            progress_bar.progress(40)
+            
+            feature_cols = self.feature_engineer.get_feature_list()
+            status_text.text(f"已生成 {len(feature_cols)} 個特徵")
+            
+            # 步驟 3: 調用 train_v2.py
+            st.markdown("**步驟 3/5: 模型訓練 (Optuna 優化)**")
+            status_text.text(f"執行 {optuna_trials} trials 超參數搜索...")
+            
+            # 準備參數
+            cmd = [
+                sys.executable,
+                "train_v2.py",
+                "--enable_advanced", str(enable_advanced),
+                "--enable_ml", str(enable_ml),
+                "--optuna_trials", str(optuna_trials),
+                "--wf_folds", str(wf_folds),
+                "--data_days", str(data_days)
+            ]
+            
+            # 執行訓練
+            try:
+                # 創建日誌顯示區域
+                log_expander = st.expander("訓練日誌", expanded=True)
+                log_placeholder = log_expander.empty()
+                
+                # 執行訓練腳本
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1
+                )
+                
+                # 實時顯示輸出
+                output_lines = []
+                for line in process.stdout:
+                    output_lines.append(line)
+                    # 只顯示最後 20 行
+                    log_placeholder.code(''.join(output_lines[-20:]))
+                
+                process.wait()
+                
+                if process.returncode != 0:
+                    st.error(f"訓練失敗,返回碼: {process.returncode}")
+                    return
+                
+                progress_bar.progress(80)
+                status_text.text("訓練完成,分析結果...")
+                
+            except Exception as e:
+                st.error(f"訓練過程出錯: {str(e)}")
+                logger.error(f"Training failed: {str(e)}")
+                return
+            
+            # 步驟 4: 載入結果
+            st.markdown("**步驟 4/5: 載入訓練結果**")
+            
+            models_dir = Path("models_output")
+            
+            # 找到最新的 V2 模型
+            v2_models = list(models_dir.glob("catboost_*_v2_*.pkl"))
+            if v2_models:
+                latest_model = max(v2_models, key=lambda x: x.stat().st_mtime)
+                status_text.text(f"找到模型: {latest_model.name}")
+            else:
+                st.warning("未找到訓練好的模型")
+                return
+            
+            progress_bar.progress(90)
+            
+            # 步驟 5: 顯示結果
+            st.markdown("**步驟 5/5: 結果分析**")
+            
+            # 載入訓練報告
+            reports_dir = Path("training_reports")
+            if reports_dir.exists():
+                report_files = list(reports_dir.glob("v2_training_report_*.json"))
+                if report_files:
+                    latest_report = max(report_files, key=lambda x: x.stat().st_mtime)
+                    
+                    with open(latest_report, 'r') as f:
+                        report = json.load(f)
+                    
+                    self.display_training_results(report)
+            
+            progress_bar.progress(100)
+            status_text.text("訓練流程完成!")
+            
+            st.success("V2 模型訓練完成!")
+            st.info("現在可以前往回測標籤測試模型性能")
     
-    def render_training_results(self, results):
-        """顯示訓練結果"""
-        st.subheader("🏆 訓練結果")
+    def display_training_results(self, report: dict):
+        """
+        顯示訓練結果
+        """
+        st.markdown("---")
+        st.subheader("訓練結果")
         
-        # 1. 模型路徑
-        st.success("✅ 模型已保存")
-        col1, col2 = st.columns(2)
+        # 基本信息
+        col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            st.code(f"Long: {results['long_path'].name}", language="text")
+            st.metric("特徵數", report.get('total_features', 'N/A'))
         
         with col2:
-            st.code(f"Short: {results['short_path'].name}", language="text")
+            st.metric("訓練樣本", f"{report.get('train_samples', 0):,}")
+        
+        with col3:
+            st.metric("測試樣本", f"{report.get('test_samples', 0):,}")
+        
+        with col4:
+            training_time = report.get('training_time_minutes', 0)
+            st.metric("訓練時間", f"{training_time:.1f} 分鐘")
         
         st.markdown("---")
         
-        # 2. 模型性能
-        st.subheader("📊 模型性能")
-        
+        # Long 和 Short 性能
         col1, col2 = st.columns(2)
         
         with col1:
-            st.markdown("### Long Oracle")
-            st.metric("AUC", f"{results['eval_long']['auc']:.4f}")
+            st.markdown("#### Long Oracle")
+            long_metrics = report.get('long_metrics', {})
             
-            # Threshold 分析
-            threshold_metrics = results['eval_long']['threshold_metrics']
-            
-            threshold_df = pd.DataFrame([
-                {
-                    'Threshold': th,
-                    'Precision': f"{m['precision']*100:.1f}%",
-                    'Recall': f"{m['recall']:.2f}%",
-                    'Samples': m['samples']
-                }
-                for th, m in threshold_metrics.items()
-            ])
-            
-            st.dataframe(threshold_df, use_container_width=True)
+            st.metric("AUC", f"{long_metrics.get('auc', 0):.4f}")
+            st.metric("Precision@0.16", f"{long_metrics.get('precision_at_016', 0)*100:.2f}%")
+            st.metric("Recall@0.16", f"{long_metrics.get('recall_at_016', 0)*100:.2f}%")
         
         with col2:
-            st.markdown("### Short Oracle")
-            st.metric("AUC", f"{results['eval_short']['auc']:.4f}")
+            st.markdown("#### Short Oracle")
+            short_metrics = report.get('short_metrics', {})
             
-            threshold_metrics = results['eval_short']['threshold_metrics']
-            
-            threshold_df = pd.DataFrame([
-                {
-                    'Threshold': th,
-                    'Precision': f"{m['precision']*100:.1f}%",
-                    'Recall': f"{m['recall']:.2f}%",
-                    'Samples': m['samples']
-                }
-                for th, m in threshold_metrics.items()
-            ])
-            
-            st.dataframe(threshold_df, use_container_width=True)
+            st.metric("AUC", f"{short_metrics.get('auc', 0):.4f}")
+            st.metric("Precision@0.16", f"{short_metrics.get('precision_at_016', 0)*100:.2f}%")
+            st.metric("Recall@0.16", f"{short_metrics.get('recall_at_016', 0)*100:.2f}%")
         
         st.markdown("---")
         
-        # 3. Walk-Forward 結果
-        if results.get('walk_forward') is not None:
-            st.subheader("📊 Walk-Forward 驗證")
-            
-            wf_df = results['walk_forward']
+        # Walk-Forward 結果
+        st.markdown("#### Walk-Forward 驗證")
+        
+        wf_results = report.get('walk_forward_results', {})
+        if wf_results:
+            long_wf = wf_results.get('long', {})
+            short_wf = wf_results.get('short', {})
             
             col1, col2 = st.columns(2)
             
             with col1:
-                st.metric(
-                    "Average AUC",
-                    f"{wf_df['auc'].mean():.4f}",
-                    f"±{wf_df['auc'].std():.4f}"
-                )
+                st.markdown("**Long WF AUC**")
+                if 'fold_scores' in long_wf:
+                    for i, score in enumerate(long_wf['fold_scores'], 1):
+                        st.text(f"Fold {i}: {score:.4f}")
+                    st.text(f"Average: {long_wf.get('mean_auc', 0):.4f} ± {long_wf.get('std_auc', 0):.4f}")
             
             with col2:
-                st.metric(
-                    "Average Precision@0.16",
-                    f"{wf_df['precision_016'].mean()*100:.1f}%"
-                )
-            
-            # 結果表格
-            st.dataframe(wf_df, use_container_width=True)
-            
-            # AUC 趋勢圖
-            fig = px.line(
-                wf_df,
-                x='fold',
-                y='auc',
-                title='Walk-Forward AUC 趋勢',
-                markers=True
-            )
-            st.plotly_chart(fig, use_container_width=True)
+                st.markdown("**Short WF AUC**")
+                if 'fold_scores' in short_wf:
+                    for i, score in enumerate(short_wf['fold_scores'], 1):
+                        st.text(f"Fold {i}: {score:.4f}")
+                    st.text(f"Average: {short_wf.get('mean_auc', 0):.4f} ± {short_wf.get('std_auc', 0):.4f}")
         
         st.markdown("---")
         
-        # 4. 下一步
-        st.subheader("🚀 下一步")
+        # 最佳超參數
+        st.markdown("#### Optuna 最佳超參數")
         
-        st.info("""
-        🎯 **建議流程**:
+        col1, col2 = st.columns(2)
         
-        1. ✅ 前往 "策略回測" 標籤頁
-        2. 📊 選擇剛才訓練的 V2 模型
-        3. 🚀 執行回測驗證
-        4. 📊 對比 V1 vs V2 性能
-        5. ✅ 如果 Profit Factor > 1.4 -> Paper Trading
-        """)
+        with col1:
+            st.markdown("**Long Oracle**")
+            long_params = report.get('long_best_params', {})
+            for key, value in long_params.items():
+                st.text(f"{key}: {value}")
         
-        if st.button("📊 前往回測頁面", type="primary", use_container_width=True):
-            st.switch_page("pages/backtesting.py")
-    
-    def start_training(self, enable_hyperopt, enable_ensemble, 
-                      enable_walk_forward, n_trials,
-                      enable_advanced, enable_ml):
-        """開始訓練"""
-        st.session_state.training_status = 'running'
-        st.session_state.training_logs = []
+        with col2:
+            st.markdown("**Short Oracle**")
+            short_params = report.get('short_best_params', {})
+            for key, value in short_params.items():
+                st.text(f"{key}: {value}")
         
-        try:
-            # 初始化 trainer
-            from utils.feature_engineering_v2 import FeatureEngineerV2
-            
-            # 更新 FeatureEngineer 配置
-            FeatureEngineerV2.__init__.__defaults__ = (
-                enable_advanced,
-                enable_ml
-            )
-            
-            trainer = AdvancedTrainer(
-                enable_hyperopt=enable_hyperopt,
-                enable_ensemble=enable_ensemble,
-                enable_walk_forward=enable_walk_forward,
-                n_trials=n_trials
-            )
-            
-            # 執行訓練
-            results = trainer.run()
-            
-            # 保存結果
-            st.session_state.training_results = results
-            st.session_state.training_status = 'completed'
-            
-        except Exception as e:
-            logger.error(f"Training failed: {e}")
-            st.session_state.training_status = 'error'
-            st.error(f"⚠️ 訓練失敗: {str(e)}")
+        st.markdown("---")
         
-        st.rerun()
+        # 特徵重要性 Top 10
+        st.markdown("#### 特徵重要性 Top 10")
+        
+        long_importance = report.get('long_feature_importance', {})
+        short_importance = report.get('short_feature_importance', {})
+        
+        if long_importance or short_importance:
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("**Long Oracle**")
+                if long_importance:
+                    # 取前10個
+                    top_features = dict(sorted(
+                        long_importance.items(),
+                        key=lambda x: x[1],
+                        reverse=True
+                    )[:10])
+                    
+                    fig = go.Figure(go.Bar(
+                        x=list(top_features.values()),
+                        y=list(top_features.keys()),
+                        orientation='h'
+                    ))
+                    fig.update_layout(
+                        height=400,
+                        margin=dict(l=150, r=20, t=20, b=20)
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+            
+            with col2:
+                st.markdown("**Short Oracle**")
+                if short_importance:
+                    top_features = dict(sorted(
+                        short_importance.items(),
+                        key=lambda x: x[1],
+                        reverse=True
+                    )[:10])
+                    
+                    fig = go.Figure(go.Bar(
+                        x=list(top_features.values()),
+                        y=list(top_features.keys()),
+                        orientation='h'
+                    ))
+                    fig.update_layout(
+                        height=400,
+                        margin=dict(l=150, r=20, t=20, b=20)
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
