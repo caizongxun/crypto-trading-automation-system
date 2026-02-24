@@ -81,25 +81,6 @@ class AdaptiveBacktester:
         self.model_long = joblib.load(model_long_path)
         self.model_short = joblib.load(model_short_path)
         
-        # 提取特徵
-        try:
-            if hasattr(self.model_long, 'estimators_'):
-                base_model_long = self.model_long.estimators_[0].estimator
-                base_model_short = self.model_short.estimators_[0].estimator
-            else:
-                base_model_long = self.model_long
-                base_model_short = self.model_short
-            
-            self.features_long = list(base_model_long.feature_names_)
-            self.features_short = list(base_model_short.feature_names_)
-            
-            logger.info(f"Features loaded: {len(self.features_long)} (Long), {len(self.features_short)} (Short)")
-        except Exception as e:
-            logger.error(f"Failed to extract features: {e}")
-            self.features_long = ['efficiency_ratio', 'extreme_time_diff', 'vol_imbalance_ratio',
-                                 'z_score', 'bb_width_pct', 'rsi', 'atr_pct', 'z_score_1h', 'atr_pct_1d']
-            self.features_short = self.features_long
-        
         # 基礎參數
         self.initial_capital = initial_capital
         self.base_position_size_pct = base_position_size_pct
@@ -204,7 +185,7 @@ class AdaptiveBacktester:
         if not self.enable_time_based_strategy:
             return self.prob_threshold_long if direction == 'LONG' else self.prob_threshold_short
         
-        # 歐洲時段 (09-13 UTC): 趨勢性較弱
+        # 歐洲時段 (09-13 UTC): 趋勢性較弱
         if 9 <= hour <= 13:
             return (self.prob_threshold_long if direction == 'LONG' else self.prob_threshold_short) * 0.95
         
@@ -454,13 +435,15 @@ class AdaptiveBacktester:
         logger.info("="*80)
         logger.info("STARTING ADAPTIVE BACKTEST")
         logger.info("="*80)
+        logger.info(f"Features: {len(feature_cols)} -> {feature_cols[:5]}...")
         
-        # 批次預測
-        X_long = df_test[self.features_long].fillna(0).values
-        X_short = df_test[self.features_short].fillna(0).values
+        # 批次預測 - 使用傳入的 feature_cols
+        X_test = df_test[feature_cols].fillna(0).values
         
-        df_test['prob_long'] = self.model_long.predict_proba(X_long)[:, 1]
-        df_test['prob_short'] = self.model_short.predict_proba(X_short)[:, 1]
+        logger.info(f"Feature matrix shape: {X_test.shape}")
+        
+        df_test['prob_long'] = self.model_long.predict_proba(X_test)[:, 1]
+        df_test['prob_short'] = self.model_short.predict_proba(X_test)[:, 1]
         
         logger.info(f"Long prob: max={df_test['prob_long'].max():.4f}, mean={df_test['prob_long'].mean():.4f}")
         logger.info(f"Short prob: max={df_test['prob_short'].max():.4f}, mean={df_test['prob_short'].mean():.4f}")
