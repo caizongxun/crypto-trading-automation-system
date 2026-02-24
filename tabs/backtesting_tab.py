@@ -174,7 +174,7 @@ class BacktestingTab:
         if long_version != short_version:
             st.warning("Long 和 Short 模型版本不一致,建議使用相同版本")
         
-        model_version = long_version  # 使用 long 的版本
+        model_version = long_version
         
         # 顯示版本資訊
         if model_version == 'v2':
@@ -467,7 +467,7 @@ class BacktestingTab:
                 df_1m['open_time'] = pd.to_datetime(df_1m['open_time'])
                 df_1m.set_index('open_time', inplace=True)
         
-        # 根據版本選擇 feature engineer
+        # 根據版本選擇 feature engineer 並生成特徵
         if model_version == 'v2' and V2_AVAILABLE:
             with st.spinner("生成 V2 特徵 (44-54個)..."):
                 df_features = self.feature_engineer_v2.create_features_from_1m(
@@ -475,16 +475,26 @@ class BacktestingTab:
                     use_adaptive_labels=True, 
                     label_type='both'
                 )
+                # 取得特徵列表
+                feature_cols = self.feature_engineer_v2.get_feature_list()
         else:
             with st.spinner("生成 V1 特徵 (9個)..."):
                 df_features = self.feature_engineer_v1.create_features_from_1m(
                     df_1m, use_micro_structure=True, label_type='both'
                 )
+                # V1 特徵列表
+                feature_cols = [
+                    'efficiency_ratio', 'extreme_time_diff', 'vol_imbalance_ratio',
+                    'z_score', 'bb_width_pct', 'rsi', 'atr_pct', 'z_score_1h', 'atr_pct_1d'
+                ]
         
-        split_idx = int(len(df_features) * 0.8)
-        df_test = df_features.iloc[split_idx:].copy()
+        # 只保留必要的特徵
+        df_features_filtered = df_features[feature_cols + ['label_long', 'label_short']].copy()
         
-        st.info(f"測試集: {len(df_test):,} 筆 | 版本: {model_version.upper()}")
+        split_idx = int(len(df_features_filtered) * 0.8)
+        df_test = df_features_filtered.iloc[split_idx:].copy()
+        
+        st.info(f"測試集: {len(df_test):,} 筆 | 版本: {model_version.upper()} | 特徵數: {len(feature_cols)}")
         
         with st.spinner("執行回測..."):
             backtester = BidirectionalAgentBacktester(
@@ -499,7 +509,7 @@ class BacktestingTab:
                 trading_hours=params['trading_hours']
             )
             
-            results = backtester.run(df_test, [])
+            results = backtester.run(df_test, feature_cols)
             
             if results.get('total_trades', 0) > 0:
                 self.display_results_with_analysis(
@@ -530,14 +540,21 @@ class BacktestingTab:
                     use_adaptive_labels=True, 
                     label_type='both'
                 )
+                feature_cols = self.feature_engineer_v2.get_feature_list()
         else:
             with st.spinner("生成 V1 特徵..."):
                 df_features = self.feature_engineer_v1.create_features_from_1m(
                     df_1m, use_micro_structure=True, label_type='both'
                 )
+                feature_cols = [
+                    'efficiency_ratio', 'extreme_time_diff', 'vol_imbalance_ratio',
+                    'z_score', 'bb_width_pct', 'rsi', 'atr_pct', 'z_score_1h', 'atr_pct_1d'
+                ]
         
-        split_idx = int(len(df_features) * 0.8)
-        df_test = df_features.iloc[split_idx:].copy()
+        df_features_filtered = df_features[feature_cols + ['label_long', 'label_short']].copy()
+        
+        split_idx = int(len(df_features_filtered) * 0.8)
+        df_test = df_features_filtered.iloc[split_idx:].copy()
         
         with st.spinner("執行自適應回測..."):
             backtester = AdaptiveBacktester(
@@ -558,7 +575,7 @@ class BacktestingTab:
                 max_consecutive_losses=params['max_consecutive_losses']
             )
             
-            results = backtester.run(df_test, [])
+            results = backtester.run(df_test, feature_cols)
             
             if results.get('total_trades', 0) > 0:
                 self.display_results_with_analysis(
