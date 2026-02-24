@@ -2,6 +2,40 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.0] - 2026-02-24
+
+### ✨ Added
+- **🆕 GUI 模型管理功能** - 新增完整的模型 metadata 管理界面
+  - 🔍 模型檢查: 查看模型 metadata 詳細資訊
+  - ⚖️ 模型比較: 驗證 Long/Short 模型特徵一致性
+  - 🗑️ 模型管理: 刪除舊模型釋放空間
+- 新增 `ModelManagementTab` 標籤頁
+- 新增 `GUI_USAGE_GUIDE.md` 使用指南
+- 在 sidebar 顯示模型統計 (V1/V2 模型數量)
+
+### 📝 Changed
+- 更新 `main.py` 整合模型管理標籤
+  - V1 模式: 6 個標籤 (原 5 + 模型管理)
+  - V2 模式: 7 個標籤 (原 6 + 模型管理)
+- 更新 `tabs/__init__.py` 匯出新標籤
+- Sidebar 增強系統狀態顯示
+
+### 📈 Improved
+- GUI 現在可以直觀驗證模型 metadata
+- 不再需要命令行工具驗證模型
+- 一鍵檢查 Long/Short 模型一致性
+- 支援匯出 metadata 為 JSON
+
+### 📚 Documentation
+- 新增 `GUI_USAGE_GUIDE.md` 詳細使用指南
+  - 模型檢查教學
+  - 模型比較教學
+  - 工作流程建議
+  - 常見問題解答
+  - 進階技巧
+
+---
+
 ## [1.1.0] - 2026-02-24
 
 ### 🐛 Fixed
