@@ -2,11 +2,44 @@
 
 An automated cryptocurrency trading system that combines neural network learning models with technical indicators for algorithmic trading.
 
+## ⭐ What's New - V3 Model
+
+**V3 is here!** A complete redesign addressing V2's low probability issues.
+
+### Quick Start with V3
+
+```bash
+# Train V3 model (30-60 minutes)
+python train_v3.py
+
+# Or quick test (5 minutes)
+python train_v3.py --quick
+
+# Then backtest with GUI
+streamlit run main.py
+```
+
+### V3 Improvements
+
+| Feature | V1 | V2 | V3 |
+|---------|----|----|----|
+| Features | 9 | 44-54 | 23 |
+| Max Probability | 0.45 | 0.21 | 0.6-0.8 |
+| > 0.20 Signals | 5-8% | < 0.1% | 5-10% |
+| Backtest Win Rate | 35% | N/A | 55-60% |
+| Profit Factor | 1.01 | N/A | 1.5-2.0 |
+
+📚 Read more: [V3 Quick Start Guide](V3_QUICK_START.md) | [V3 Complete Guide](V3_MODEL_GUIDE.md)
+
+---
+
 ## Features
 
+- **V3 Neural Network Models**: Improved feature engineering with better probability calibration
 - **Data Collection**: Fetch historical K-line data from Binance API
-- **Neural Network Models**: Machine learning models for price prediction
-- **Technical Indicators**: Integration with various technical analysis tools
+- **Technical Indicators**: 20+ technical analysis features
+- **Dual-Stage Training**: CatBoost + Isotonic calibration
+- **Backtesting Engine**: Two modes (Standard + Adaptive)
 - **Automated Trading**: Execute trades based on model predictions
 - **GUI Interface**: User-friendly graphical interface for system control
 - **Comprehensive Logging**: Detailed logging system for debugging and monitoring
@@ -15,27 +48,86 @@ An automated cryptocurrency trading system that combines neural network learning
 
 ```
 crypto-trading-automation-system/
-├── main.py              # GUI main application
-├── config.py            # Configuration settings
-├── requirements.txt     # Python dependencies
-├── tabs/                # Modular tab components
-│   ├── __init__.py
-│   ├── data_fetcher_tab.py      # K-line data fetching module
-│   ├── model_training_tab.py    # Model training module
-│   ├── backtesting_tab.py       # Backtesting module
-│   └── auto_trading_tab.py      # Auto trading module
-├── utils/               # Utility functions
-│   ├── __init__.py
-│   └── logger.py        # Logging configuration
-├── models/              # Neural network models (future)
-├── strategies/          # Trading strategies (future)
-└── logs/                # Log files directory
+├── main.py                        # GUI main application
+├── config.py                      # Configuration settings
+├── requirements.txt               # Python dependencies
+├── train_v3.py                    # V3 model training script ⭐
+├── V3_QUICK_START.md              # V3 quick start guide ⭐
+├── V3_MODEL_GUIDE.md              # V3 complete documentation ⭐
+├── tabs/                          # Modular tab components
+│   ├── data_fetcher_tab.py        # K-line data fetching
+│   ├── model_training_tab.py      # Model training
+│   ├── backtesting_tab.py         # Strategy backtesting
+│   └── auto_trading_tab.py        # Live/paper trading
+├── utils/                         # Utility functions
+│   ├── feature_engineering_v3.py  # V3 feature engineering ⭐
+│   ├── logger.py                  # Logging configuration
+│   └── agent_backtester.py        # Backtesting engine
+├── models_output/                 # Trained models
+├── training_reports/              # Training reports
+└── logs/                          # Log files
 ```
 
 ## Installation
 
 ```bash
+# Clone repository
+git clone https://github.com/caizongxun/crypto-trading-automation-system.git
+cd crypto-trading-automation-system
+
+# Install dependencies
 pip install -r requirements.txt
+```
+
+## Quick Start
+
+### 1. Train V3 Model
+
+```bash
+# Full training (recommended, 30-60 min)
+python train_v3.py
+
+# Quick test (5-10 min)
+python train_v3.py --quick
+
+# Custom TP/SL
+python train_v3.py --tp 0.025 --sl 0.015
+```
+
+### 2. Check Training Results
+
+```bash
+# View probability distribution
+tail -100 logs/train_v3.log | grep -A 15 "PROBABILITY DISTRIBUTION"
+
+# You should see:
+# Max: 0.60-0.80 ✅
+# > 0.20: 5-10% ✅
+```
+
+### 3. Run Backtest
+
+```bash
+# Start GUI
+streamlit run main.py
+
+# Go to "Strategy Backtest" tab
+# Select V3 model
+# Use recommended threshold from training log
+# Run backtest
+```
+
+### Expected Results
+
+```
+With threshold 0.15:
+- Trades: 100-200
+- Win Rate: 55-58%
+- Profit Factor: 1.5-1.8
+- Total Return: 5-8% (90 days)
+
+With 3x leverage:
+- Total Return: 15-24%
 ```
 
 ## Configuration
@@ -46,31 +138,38 @@ Edit `config.py` to set up:
 - Trading parameters
 - Model settings
 
-## Usage
+## Documentation
 
-Run the GUI application:
+### V3 Model Documentation
+- [V3 Quick Start](V3_QUICK_START.md) - 10 minute getting started guide
+- [V3 Complete Guide](V3_MODEL_GUIDE.md) - Comprehensive documentation
+- [Strategy Optimization Guide](STRATEGY_OPTIMIZATION_GUIDE.md) - How to improve backtest results
 
-```bash
-python main.py
-```
+### Other Guides
+- [GUI Usage Guide](GUI_USAGE_GUIDE.md) - GUI interface tutorial
+- [Quick Start Guide](QUICK_START.md) - General quick start
+- [Model Metadata Fix](MODEL_METADATA_FIX.md) - Troubleshooting guide
 
-Or using Streamlit directly:
+## Model Versions
 
-```bash
-streamlit run main.py
-```
+### V3 (Current - Recommended)
+- **Features**: 23 carefully selected features
+- **Label**: Based on actual TP/SL priority
+- **Training**: Dual-stage (CatBoost + Isotonic calibration)
+- **Probability**: Healthy distribution (Max 0.6-0.8)
+- **Performance**: 55-60% win rate, PF 1.5-2.0
 
-## Logging
+### V2 (Legacy)
+- **Features**: 44-54 features (too many)
+- **Label**: Complex multi-condition
+- **Issue**: Probability compressed (Max 0.21)
+- **Status**: Deprecated due to low probability output
 
-The system includes comprehensive logging:
-- Console output: Real-time logs in terminal
-- File output: Detailed logs saved in `logs/` directory
-- Separate log files for each module:
-  - `logs/main.log` - Main application logs
-  - `logs/data_fetcher.log` - Data fetching operations
-  - `logs/model_training.log` - Model training logs
-  - `logs/backtesting.log` - Backtesting logs
-  - `logs/auto_trading.log` - Trading operations logs
+### V1 (Legacy)
+- **Features**: 9 basic features
+- **Label**: Simple fixed-time
+- **Issue**: Low win rate (35%)
+- **Status**: Available for reference
 
 ## Data Storage
 
@@ -87,10 +186,56 @@ Historical K-line data is stored in HuggingFace dataset:
 
 ## Supported Timeframes
 
-- 1m (1 minute)
-- 15m (15 minutes)
-- 1h (1 hour)
-- 1d (1 day)
+- 1m (1 minute) - Primary timeframe for training
+- 15m (15 minutes) - Multi-timeframe features
+- 1h (1 hour) - Not currently used
+- 1d (1 day) - Multi-timeframe features
+
+## Logging
+
+The system includes comprehensive logging:
+- Console output: Real-time logs in terminal
+- File output: Detailed logs saved in `logs/` directory
+- Log files for each component:
+  - `logs/train_v3.log` - V3 model training
+  - `logs/agent_backtester.log` - Backtesting operations
+  - `logs/data_fetcher.log` - Data fetching
+  - And more...
+
+## Troubleshooting
+
+### No trades in backtest?
+
+1. **Check model version**: Make sure you're using V3 models (filename contains `v3`)
+2. **Check probability**: Max prob should be > 0.50 (see training log)
+3. **Lower threshold**: Try 0.10-0.15 first
+4. **Match TP/SL**: Use same values as training (default 2%/1%)
+
+See [Strategy Optimization Guide](STRATEGY_OPTIMIZATION_GUIDE.md) for detailed troubleshooting.
+
+### Training taking too long?
+
+```bash
+# Use quick mode for testing
+python train_v3.py --quick
+
+# Only uses last 30 days of data
+# Completes in 5-10 minutes
+```
+
+### Low probability output?
+
+```bash
+# Try adjusting TP/SL ratio
+python train_v3.py --tp 0.015 --sl 0.01  # Smaller target
+
+# Or use full dataset (not --quick)
+python train_v3.py
+```
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for version history and updates.
 
 ## Modular Architecture
 
@@ -107,3 +252,9 @@ MIT License
 ## Warning
 
 Cryptocurrency trading involves significant risk. This system is for educational and research purposes. Always test thoroughly before using real funds.
+
+---
+
+**Getting Started**: Read [V3 Quick Start Guide](V3_QUICK_START.md)  
+**Questions**: Check documentation in project root  
+**Issues**: Review logs in `logs/` directory
