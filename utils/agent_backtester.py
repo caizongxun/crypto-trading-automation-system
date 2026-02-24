@@ -39,7 +39,7 @@ class BidirectionalAgentBacktester:
     雙向事件驅動智能體 - 機率校準版
     
     **核心修復**:
-    - 從模型讀取特徵
+    - 使用傳入的特徵列表
     - 批次預測機率
     - 雙向互斥 (prob_opposite < 0.10)
     - Debug 探測器
@@ -68,28 +68,6 @@ class BidirectionalAgentBacktester:
         logger.info("Loading Long and Short Oracles...")
         self.model_long = joblib.load(model_long_path)
         self.model_short = joblib.load(model_short_path)
-        
-        # 從模型讀取特徵名稱
-        try:
-            if hasattr(self.model_long, 'estimators_'):
-                base_model_long = self.model_long.estimators_[0].estimator
-                base_model_short = self.model_short.estimators_[0].estimator
-            else:
-                base_model_long = self.model_long
-                base_model_short = self.model_short
-            
-            self.features_long = list(base_model_long.feature_names_)
-            self.features_short = list(base_model_short.feature_names_)
-            
-            logger.info(f"Long Oracle features ({len(self.features_long)}): {self.features_long[:5]}...")
-            logger.info(f"Short Oracle features ({len(self.features_short)}): {self.features_short[:5]}...")
-            
-        except Exception as e:
-            logger.error(f"Failed to extract feature names: {str(e)}")
-            self.features_long = ['efficiency_ratio', 'extreme_time_diff', 'vol_imbalance_ratio',
-                                 'z_score', 'bb_width_pct', 'rsi', 'atr_pct', 'z_score_1h', 'atr_pct_1d']
-            self.features_short = self.features_long
-            logger.warning(f"Using fallback features: {self.features_long}")
         
         # 資金設定
         self.initial_capital = initial_capital
@@ -353,30 +331,32 @@ class BidirectionalAgentBacktester:
         logger.info("="*80)
         logger.info(f"Test period: {df_test.index[0]} to {df_test.index[-1]}")
         logger.info(f"Total bars: {len(df_test):,}")
+        logger.info(f"Features: {len(feature_cols)} -> {feature_cols[:5]}...")
         
         # 批次預測機率
         logger.info("Batch predicting probabilities...")
         
         try:
-            # 提取特徵
-            X_long = df_test[self.features_long].fillna(0).values
-            X_short = df_test[self.features_short].fillna(0).values
+            # 提取特徵 - 使用傳入的 feature_cols
+            X_test = df_test[feature_cols].fillna(0).values
             
             # 檢查 NaN
-            nan_ratio_long = np.isnan(X_long).sum() / X_long.size
-            nan_ratio_short = np.isnan(X_short).sum() / X_short.size
+            nan_ratio = np.isnan(X_test).sum() / X_test.size
             
-            if nan_ratio_long > 0.5 or nan_ratio_short > 0.5:
-                logger.warning(f"⚠️ NaN ratio: Long={nan_ratio_long*100:.1f}%, Short={nan_ratio_short*100:.1f}%")
-                logger.warning("特徵可能遺失，模型將成為瞎子")
+            if nan_ratio > 0.5:
+                logger.warning(f"NaN ratio: {nan_ratio*100:.1f}%")
+                logger.warning("特徵可能遺失,模型將成為瞎子")
+            
+            logger.info(f"Feature matrix shape: {X_test.shape}")
+            logger.info(f"NaN ratio: {nan_ratio*100:.2f}%")
             
             # 批次預測
-            df_test['prob_long'] = self.model_long.predict_proba(X_long)[:, 1]
-            df_test['prob_short'] = self.model_short.predict_proba(X_short)[:, 1]
+            df_test['prob_long'] = self.model_long.predict_proba(X_test)[:, 1]
+            df_test['prob_short'] = self.model_short.predict_proba(X_test)[:, 1]
             
             # [核心 Debug] 機率分布探測器
             logger.info("="*80)
-            logger.info("🔍 PROBABILITY DISTRIBUTION ANALYSIS")
+            logger.info("PROBABILITY DISTRIBUTION ANALYSIS")
             logger.info("="*80)
             
             for name, prob_col in [('Long', 'prob_long'), ('Short', 'prob_short')]:
@@ -402,7 +382,7 @@ class BidirectionalAgentBacktester:
             logger.info(f"  Short >= {self.prob_threshold_short:.3f}: {high_prob_short:,} bars ({high_prob_short/len(df_test)*100:.2f}%)")
             
             if high_prob_long == 0 and high_prob_short == 0:
-                logger.warning("⚠️ 沒有任何機率超過閾值的訊號！請降低閾值到 0.10-0.12")
+                logger.warning("沒有任何機率超過閾值的訊號！請降低閾值到 0.10-0.12")
             
             logger.info("="*80)
             
@@ -438,7 +418,7 @@ class BidirectionalAgentBacktester:
     def calculate_metrics(self) -> Dict:
         """計算回測統計指標"""
         if len(self.trades) == 0:
-            logger.warning("⚠️ No trades executed during backtest")
+            logger.warning("No trades executed during backtest")
             logger.warning("Please check probability distribution above")
             return {'total_trades': 0}
         
