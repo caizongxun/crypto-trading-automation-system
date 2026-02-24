@@ -12,6 +12,55 @@ from utils.logger import setup_logger
 
 logger = setup_logger('agent_backtester', 'logs/agent_backtester.log')
 
+# V1 fallback 特徵
+V1_FEATURES = [
+    'efficiency_ratio', 'extreme_time_diff', 'vol_imbalance_ratio',
+    'zscore', 'bb_width_pct', 'rsi', 'atr_pct', 'zscore_1h', 'atr_pct_1d'
+]
+
+def load_model_with_metadata(model_path: str):
+    """
+    載入模型並解析 metadata
+    
+    Returns:
+        tuple: (model, feature_names, version)
+    """
+    try:
+        with open(model_path, 'rb') as f:
+            data = joblib.load(f)
+        
+        # 判斷是新格式 (dict) 還是舊格式 (直接是模型)
+        if isinstance(data, dict):
+            model = data['model']
+            feature_names = data['feature_names']
+            version = data.get('version', 'unknown')
+            
+            logger.info(f"✅ Loaded {version} model from {model_path}")
+            logger.info(f"   Features ({len(feature_names)}): {feature_names[:5]}... (showing first 5)")
+            
+        else:
+            # 舊格式:直接是 CalibratedClassifierCV 物件
+            model = data
+            
+            # 嘗試從模型屬性讀取
+            if hasattr(model, 'feature_names_in_'):
+                feature_names = model.feature_names_in_.tolist()
+                version = 'v2_legacy'
+                logger.info(f"✅ Loaded model with feature_names_in_ attribute")
+            else:
+                # fallback 到 V1
+                feature_names = V1_FEATURES
+                version = 'v1'
+                logger.warning(f"⚠️ Model has no feature metadata, using V1 fallback")
+            
+            logger.info(f"   Features ({len(feature_names)}): {feature_names}")
+        
+        return model, feature_names, version
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to load model: {e}")
+        raise
+
 class AgentState(Enum):
     """智能體狀態機"""
     IDLE = "IDLE"
@@ -64,10 +113,33 @@ class BidirectionalAgentBacktester:
         logger.info("INITIALIZING BIDIRECTIONAL AGENT - CALIBRATED PROBABILITY VERSION")
         logger.info("="*80)
         
-        # 載入模型
+        # 載入模型 (使用新的 load_model_with_metadata)
         logger.info("Loading Long and Short Oracles...")
-        self.model_long = joblib.load(model_long_path)
-        self.model_short = joblib.load(model_short_path)
+        
+        self.model_long, self.feature_names_long, self.version_long = \
+            load_model_with_metadata(model_long_path)
+        
+        self.model_short, self.feature_names_short, self.version_short = \
+            load_model_with_metadata(model_short_path)
+        
+        # 驗證特徵一致性
+        if self.feature_names_long != self.feature_names_short:
+            logger.warning(
+                f"⚠️ Feature mismatch!\n"
+                f"   Long ({len(self.feature_names_long)}):  {self.feature_names_long[:3]}...\n"
+                f"   Short ({len(self.feature_names_short)}): {self.feature_names_short[:3]}..."
+            )
+            # 使用 Long 的特徵作為主要特徵
+            logger.warning("⚠️ Using Long features as primary")
+        
+        self.feature_names = self.feature_names_long
+        
+        logger.info(
+            f"🚀 Backtester initialized\n"
+            f"   Long:  {self.version_long} with {len(self.feature_names_long)} features\n"
+            f"   Short: {self.version_short} with {len(self.feature_names_short)} features\n"
+            f"   Using: {self.feature_names}"
+        )
         
         # 資金設定
         self.initial_capital = initial_capital
@@ -324,14 +396,22 @@ class BidirectionalAgentBacktester:
                 self.state = AgentState.IDLE
                 return
     
-    def run(self, df_test: pd.DataFrame, feature_cols: List[str]) -> Dict:
+    def run(self, df_test: pd.DataFrame, feature_cols: List[str] = None) -> Dict:
         """執行回測 - 批次預測版"""
         logger.info("="*80)
         logger.info("STARTING BIDIRECTIONAL BACKTEST - CALIBRATED PROBABILITY MODE")
         logger.info("="*80)
         logger.info(f"Test period: {df_test.index[0]} to {df_test.index[-1]}")
         logger.info(f"Total bars: {len(df_test):,}")
-        logger.info(f"Features: {len(feature_cols)} -> {feature_cols[:5]}...")
+        
+        # 使用傳入的 feature_cols,或使用從模型讀取的
+        if feature_cols is None:
+            feature_cols = self.feature_names
+            logger.info(f"✅ Using features from model metadata ({len(feature_cols)})")
+        else:
+            logger.info(f"ℹ️ Using provided feature_cols ({len(feature_cols)})")
+        
+        logger.info(f"Features: {feature_cols}")
         
         # 批次預測機率
         logger.info("Batch predicting probabilities...")
