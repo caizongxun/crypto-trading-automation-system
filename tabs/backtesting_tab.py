@@ -112,7 +112,7 @@ class BacktestingTab:
         if V2_AVAILABLE and v2_models:
             version_choice = st.radio(
                 f"{direction.upper()} 模型版本",
-                options=["🜢 V2 (推薦)", "🔵 V1"],
+                options=["🔶 V2 (推薦)", "🔵 V1"],
                 index=0,
                 key=f"{prefix}_{direction}_version",
                 horizontal=True
@@ -172,7 +172,7 @@ class BacktestingTab:
         
         # 版本一致性檢查
         if long_version != short_version:
-            st.warning("⚠️ Long 和 Short 模型版本不一致,建議使用相同版本")
+            st.warning("⚠️ Long 和Short 模型版本不一致,建議使用相同版本")
         
         model_version = long_version  # 使用 long 的版本
         
@@ -469,8 +469,12 @@ class BacktestingTab:
         
         # 根據版本選擇 feature engineer
         if model_version == 'v2' and V2_AVAILABLE:
-            with st.spinner("🜢 生成 V2 特徵 (44-54個)..."):
-                df_features = self.feature_engineer_v2.create_features(df_1m)
+            with st.spinner("🔶 生成 V2 特徵 (44-54個)..."):
+                df_features = self.feature_engineer_v2.create_features_from_1m(
+                    df_1m, 
+                    use_adaptive_labels=True, 
+                    label_type='both'
+                )
         else:
             with st.spinner("🔵 生成 V1 特徵 (9個)..."):
                 df_features = self.feature_engineer_v1.create_features_from_1m(
@@ -521,7 +525,11 @@ class BacktestingTab:
         # 根據版本選擇 feature engineer
         if model_version == 'v2' and V2_AVAILABLE:
             with st.spinner("生成 V2 特徵..."):
-                df_features = self.feature_engineer_v2.create_features(df_1m)
+                df_features = self.feature_engineer_v2.create_features_from_1m(
+                    df_1m, 
+                    use_adaptive_labels=True, 
+                    label_type='both'
+                )
         else:
             with st.spinner("生成 V1 特徵..."):
                 df_features = self.feature_engineer_v1.create_features_from_1m(
@@ -567,7 +575,7 @@ class BacktestingTab:
         
         # 顯示版本
         if model_version == 'v2':
-            st.info("🜢 本次回測使用 V2 特徵 (44-54個)")
+            st.info("🔶 本次回測使用 V2 特徵 (44-54個)")
         else:
             st.info("🔵 本次回測使用 V1 特徵 (9個)")
         
