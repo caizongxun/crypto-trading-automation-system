@@ -472,7 +472,7 @@ class BacktestingTab:
             with st.spinner("生成 V2 特徵 (44-54個)..."):
                 df_features = self.feature_engineer_v2.create_features_from_1m(
                     df_1m, 
-                    use_adaptive_labels=True, 
+                    use_adaptive_labels=False,  # 回測不需要標籤
                     label_type='both'
                 )
                 # 取得特徵列表
@@ -488,8 +488,13 @@ class BacktestingTab:
                     'z_score', 'bb_width_pct', 'rsi', 'atr_pct', 'z_score_1h', 'atr_pct_1d'
                 ]
         
-        # 只保留必要的特徵
-        df_features_filtered = df_features[feature_cols + ['label_long', 'label_short']].copy()
+        # 只保留必要的特徵 - 回測不需要 label
+        df_features_filtered = df_features[feature_cols].copy()
+        
+        # 加入 OHLCV 欄位供回測使用
+        for col in ['open', 'high', 'low', 'close', 'volume']:
+            if col in df_1m.columns:
+                df_features_filtered[col] = df_1m[col]
         
         split_idx = int(len(df_features_filtered) * 0.8)
         df_test = df_features_filtered.iloc[split_idx:].copy()
@@ -537,7 +542,7 @@ class BacktestingTab:
             with st.spinner("生成 V2 特徵..."):
                 df_features = self.feature_engineer_v2.create_features_from_1m(
                     df_1m, 
-                    use_adaptive_labels=True, 
+                    use_adaptive_labels=False,  # 回測不需要標籤
                     label_type='both'
                 )
                 feature_cols = self.feature_engineer_v2.get_feature_list()
@@ -551,7 +556,13 @@ class BacktestingTab:
                     'z_score', 'bb_width_pct', 'rsi', 'atr_pct', 'z_score_1h', 'atr_pct_1d'
                 ]
         
-        df_features_filtered = df_features[feature_cols + ['label_long', 'label_short']].copy()
+        # 只保留特徵 - 回測不需要 label
+        df_features_filtered = df_features[feature_cols].copy()
+        
+        # 加入 OHLCV
+        for col in ['open', 'high', 'low', 'close', 'volume']:
+            if col in df_1m.columns:
+                df_features_filtered[col] = df_1m[col]
         
         split_idx = int(len(df_features_filtered) * 0.8)
         df_test = df_features_filtered.iloc[split_idx:].copy()
