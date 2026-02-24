@@ -70,7 +70,7 @@ class BacktestingTab:
             st.success("自適應引擎: 動態參數調整,根據市場狀態優化")
             self.render_adaptive_backtest()
     
-    def load_klines(self, symbol: str, timeframe: str) -> pd.DataFrame:
+    def load_klines(self, symbol: str, timeframe: str, backtest_days: int = None) -> pd.DataFrame:
         try:
             repo_id = Config.HF_REPO_ID
             base = symbol.replace("USDT", "")
@@ -86,7 +86,16 @@ class BacktestingTab:
                 token=Config.HF_TOKEN
             )
             df = pd.read_parquet(local_path)
-            logger.info(f"Loaded {len(df):,} records")
+            
+            # 根據 backtest_days 限制數據
+            if backtest_days is not None:
+                # 1440 = 1天的分鐘數
+                total_minutes = backtest_days * 1440
+                df = df.tail(total_minutes)
+                logger.info(f"Limited to last {backtest_days} days ({len(df):,} records)")
+            else:
+                logger.info(f"Loaded all data ({len(df):,} records)")
+            
             return df
         
         except Exception as e:
@@ -184,7 +193,36 @@ class BacktestingTab:
         
         st.markdown("---")
         
-        # 回測參數
+        # 新增: 回測期間和槓桿設定
+        st.markdown("#### 回測設定")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            backtest_days = st.select_slider(
+                "回測天數",
+                options=[7, 30, 60, 90, 180, 365],
+                value=180,
+                key="std_backtest_days",
+                help="選擇回測數據的天數 (從最新數據往回算)"
+            )
+            st.caption(f"約 {backtest_days * 1440:,} 根 1m K線")
+        
+        with col2:
+            leverage = st.slider(
+                "槓桿倍數",
+                min_value=1,
+                max_value=10,
+                value=1,
+                step=1,
+                key="std_leverage",
+                help="報酬率會乘以槓桿倍數 (風險也同步放大)"
+            )
+            if leverage > 1:
+                st.warning(f"⚠️ 使用 {leverage}x 槓桿,風險提高 {leverage} 倍")
+        
+        st.markdown("---")
+        
+        # 資金管理
         st.markdown("#### 資金管理")
         col1, col2, col3, col4 = st.columns(4)
         
@@ -279,14 +317,16 @@ class BacktestingTab:
                 sl_pct=sl_pct,
                 prob_threshold_long=prob_threshold_long,
                 prob_threshold_short=prob_threshold_short,
-                trading_hours=trading_hours
+                trading_hours=trading_hours,
+                backtest_days=backtest_days,
+                leverage=leverage
             )
     
     def render_adaptive_backtest(self):
         st.markdown("---")
         st.subheader("自適應回測配置")
         
-        # 模型選擇 - 同標準回測
+        # 模型選擇
         models_dir = Path("models_output")
         if not models_dir.exists():
             st.warning("請先訓練模型")
@@ -310,6 +350,33 @@ class BacktestingTab:
             st.success("使用 V2 特徵工程")
         else:
             st.info("使用 V1 特徵工程")
+        
+        st.markdown("---")
+        
+        # 新增: 回測期間和槓桿
+        st.markdown("#### 回測設定")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            backtest_days = st.select_slider(
+                "回測天數",
+                options=[7, 30, 60, 90, 180, 365],
+                value=180,
+                key="adp_backtest_days"
+            )
+            st.caption(f"約 {backtest_days * 1440:,} 根 1m K線")
+        
+        with col2:
+            leverage = st.slider(
+                "槓桿倍數",
+                min_value=1,
+                max_value=10,
+                value=1,
+                step=1,
+                key="adp_leverage"
+            )
+            if leverage > 1:
+                st.warning(f"⚠️ {leverage}x 槓桿")
         
         st.markdown("---")
         
@@ -451,14 +518,16 @@ class BacktestingTab:
                 enable_time_based_strategy=enable_time_based,
                 enable_risk_controls=enable_risk_ctrl,
                 max_daily_loss_pct=max_daily_loss,
-                max_consecutive_losses=max_consec_loss
+                max_consecutive_losses=max_consec_loss,
+                backtest_days=backtest_days,
+                leverage=leverage
             )
     
-    def run_standard_backtest(self, model_version='v1', **params):
-        logger.info(f"Starting standard backtest with {model_version} features")
+    def run_standard_backtest(self, model_version='v1', backtest_days=180, leverage=1, **params):
+        logger.info(f"Starting standard backtest with {model_version} features, {backtest_days} days, {leverage}x leverage")
         
         with st.spinner("載入 1m K線..."):
-            df_1m = self.load_klines("BTCUSDT", "1m")
+            df_1m = self.load_klines("BTCUSDT", "1m", backtest_days=backtest_days)
             if df_1m.empty:
                 st.error("無法載入數據")
                 return
@@ -467,31 +536,29 @@ class BacktestingTab:
                 df_1m['open_time'] = pd.to_datetime(df_1m['open_time'])
                 df_1m.set_index('open_time', inplace=True)
         
-        # 根據版本選擇 feature engineer 並生成特徵
+        # 根據版本選擇 feature engineer
         if model_version == 'v2' and V2_AVAILABLE:
             with st.spinner("生成 V2 特徵 (44-54個)..."):
                 df_features = self.feature_engineer_v2.create_features_from_1m(
                     df_1m, 
-                    use_adaptive_labels=False,  # 回測不需要標籤
+                    use_adaptive_labels=False,
                     label_type='both'
                 )
-                # 取得特徵列表
                 feature_cols = self.feature_engineer_v2.get_feature_list()
         else:
             with st.spinner("生成 V1 特徵 (9個)..."):
                 df_features = self.feature_engineer_v1.create_features_from_1m(
                     df_1m, use_micro_structure=True, label_type='both'
                 )
-                # V1 特徵列表
                 feature_cols = [
                     'efficiency_ratio', 'extreme_time_diff', 'vol_imbalance_ratio',
                     'z_score', 'bb_width_pct', 'rsi', 'atr_pct', 'z_score_1h', 'atr_pct_1d'
                 ]
         
-        # 只保留必要的特徵 - 回測不需要 label
+        # 只保留必要的特徵
         df_features_filtered = df_features[feature_cols].copy()
         
-        # 加入 OHLCV 欄位供回測使用
+        # 加入 OHLCV
         for col in ['open', 'high', 'low', 'close', 'volume']:
             if col in df_1m.columns:
                 df_features_filtered[col] = df_1m[col]
@@ -499,7 +566,13 @@ class BacktestingTab:
         split_idx = int(len(df_features_filtered) * 0.8)
         df_test = df_features_filtered.iloc[split_idx:].copy()
         
-        st.info(f"測試集: {len(df_test):,} 筆 | 版本: {model_version.upper()} | 特徵數: {len(feature_cols)}")
+        actual_backtest_days = len(df_test) / 1440
+        
+        st.info(
+            f"測試集: {len(df_test):,} 筆 ({actual_backtest_days:.1f} 天) | "
+            f"版本: {model_version.upper()} | 特徵數: {len(feature_cols)} | "
+            f"槓桿: {leverage}x"
+        )
         
         with st.spinner("執行回測..."):
             backtester = BidirectionalAgentBacktester(
@@ -517,6 +590,11 @@ class BacktestingTab:
             results = backtester.run(df_test, feature_cols)
             
             if results.get('total_trades', 0) > 0:
+                # 應用槓桿到報酬率
+                results['total_return_pct_leveraged'] = results['total_return_pct'] * leverage
+                results['leverage'] = leverage
+                results['backtest_days'] = actual_backtest_days
+                
                 self.display_results_with_analysis(
                     backtester, results, params['long_model_path'], 
                     params['short_model_path'], model_version
@@ -524,11 +602,11 @@ class BacktestingTab:
             else:
                 st.warning("沒有交易。請檢查 logs/agent_backtester.log")
     
-    def run_adaptive_backtest(self, model_version='v1', **params):
-        logger.info(f"Starting adaptive backtest with {model_version} features")
+    def run_adaptive_backtest(self, model_version='v1', backtest_days=180, leverage=1, **params):
+        logger.info(f"Starting adaptive backtest with {model_version} features, {backtest_days} days, {leverage}x leverage")
         
         with st.spinner("載入數據..."):
-            df_1m = self.load_klines("BTCUSDT", "1m")
+            df_1m = self.load_klines("BTCUSDT", "1m", backtest_days=backtest_days)
             if df_1m.empty:
                 st.error("無法載入數據")
                 return
@@ -542,7 +620,7 @@ class BacktestingTab:
             with st.spinner("生成 V2 特徵..."):
                 df_features = self.feature_engineer_v2.create_features_from_1m(
                     df_1m, 
-                    use_adaptive_labels=False,  # 回測不需要標籤
+                    use_adaptive_labels=False,
                     label_type='both'
                 )
                 feature_cols = self.feature_engineer_v2.get_feature_list()
@@ -556,7 +634,7 @@ class BacktestingTab:
                     'z_score', 'bb_width_pct', 'rsi', 'atr_pct', 'z_score_1h', 'atr_pct_1d'
                 ]
         
-        # 只保留特徵 - 回測不需要 label
+        # 只保留特徵
         df_features_filtered = df_features[feature_cols].copy()
         
         # 加入 OHLCV
@@ -566,6 +644,10 @@ class BacktestingTab:
         
         split_idx = int(len(df_features_filtered) * 0.8)
         df_test = df_features_filtered.iloc[split_idx:].copy()
+        
+        actual_backtest_days = len(df_test) / 1440
+        
+        st.info(f"測試集: {len(df_test):,} 筆 ({actual_backtest_days:.1f} 天) | 槓桿: {leverage}x")
         
         with st.spinner("執行自適應回測..."):
             backtester = AdaptiveBacktester(
@@ -589,6 +671,11 @@ class BacktestingTab:
             results = backtester.run(df_test, feature_cols)
             
             if results.get('total_trades', 0) > 0:
+                # 應用槓桿
+                results['total_return_pct_leveraged'] = results['total_return_pct'] * leverage
+                results['leverage'] = leverage
+                results['backtest_days'] = actual_backtest_days
+                
                 self.display_results_with_analysis(
                     backtester, results, params['long_model_path'], 
                     params['short_model_path'], model_version
@@ -609,9 +696,13 @@ class BacktestingTab:
         
         st.markdown("---")
         
+        # 獲取槓桿和天數
+        leverage = results.get('leverage', 1)
+        backtest_days = results.get('backtest_days', 180)
+        
         # 基本指標
         st.markdown("### 核心指標")
-        col1, col2, col3, col4, col5 = st.columns(5)
+        col1, col2, col3, col4, col5, col6 = st.columns(6)
         
         with col1:
             st.metric("總交易數", results['total_trades'])
@@ -625,23 +716,75 @@ class BacktestingTab:
         
         with col4:
             total_return = results['total_return_pct']
-            st.metric("總報酬", f"{total_return*100:+.2f}%",
-                     delta="正" if total_return > 0 else "負")
+            st.metric(
+                "總報酬 (無槓桿)", 
+                f"{total_return*100:+.2f}%",
+                delta="正" if total_return > 0 else "負"
+            )
         
         with col5:
+            # 顯示槓桿後報酬
+            leveraged_return = results.get('total_return_pct_leveraged', total_return)
+            st.metric(
+                f"總報酬 ({leverage}x槓桿)",
+                f"{leveraged_return*100:+.2f}%",
+                delta=f"{leverage}x" if leverage > 1 else None
+            )
+        
+        with col6:
             pf = results['profit_factor']
             st.metric("Profit Factor", f"{pf:.2f}")
         
+        # 新增: 每日平均績效
+        st.markdown("### 績效分析")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            trades_per_day = results['total_trades'] / backtest_days
+            st.metric("每日交易數", f"{trades_per_day:.2f}")
+        
+        with col2:
+            return_per_day = (leveraged_return * 100) / backtest_days
+            st.metric("每日平均報酬", f"{return_per_day:+.3f}%")
+        
+        with col3:
+            st.metric("回測天數", f"{backtest_days:.1f} 天")
+        
+        with col4:
+            if backtest_days > 0:
+                annualized_return = ((1 + leveraged_return) ** (365 / backtest_days) - 1) * 100
+                st.metric("年化報酬", f"{annualized_return:+.1f}%")
+        
+        # 績效診斷
+        st.markdown("---")
+        st.markdown("### 績效診斷")
+        
         # 統計顯著性檢查
         if results['total_trades'] < 30:
-            st.warning("樣本數不足 (<30), 統計不顯著! 請降低閾值增加交易數量")
+            st.error("❌ 樣本數不足 (<30), 統計不顯著! 請降低閾值增加交易數量")
         else:
-            st.success("樣本數充足, 統計顯著")
+            st.success("✅ 樣本數充足, 統計顯著")
+        
+        # 勝率檢查
+        if win_rate < 0.40:
+            st.warning(f"⚠️ 勝率偏低 ({win_rate*100:.1f}%), 建議 > 45%")
+        elif win_rate > 0.55:
+            st.success(f"✅ 勝率優異 ({win_rate*100:.1f}%)")
+        
+        # Profit Factor 檢查
+        if pf < 1.2:
+            st.error(f"❌ Profit Factor 過低 ({pf:.2f}), 建議 > 1.5")
+        elif pf > 1.5:
+            st.success(f"✅ Profit Factor 健康 ({pf:.2f})")
+        
+        # 報酬率檢查
+        if leveraged_return * 100 < 5:
+            st.warning(f"⚠️ 總報酬過低 ({leveraged_return*100:.2f}%), 考慮提高槓桿或優化策略")
         
         st.markdown("---")
         
         # 執行完整診斷分析
-        st.markdown("### 診斷分析報告")
+        st.markdown("### 詳細診斷報告")
         
         with st.spinner("生成診斷分析..."):
             trades_df = backtester.get_trades_df()
@@ -657,14 +800,16 @@ class BacktestingTab:
             analysis_results = analyzer.analyze_all()
             
             # 顯示優化建議
-            st.markdown("#### 優化建議")
+            st.markdown("#### 💡 優化建議")
             recommendations = analysis_results.get('recommendations', [])
             if recommendations:
                 for i, rec in enumerate(recommendations, 1):
                     st.info(f"{i}. {rec}")
+            else:
+                st.success("當前策略表現良好,無需特別調整")
             
             # 顯示時段分析
-            st.markdown("#### 時段績效分析")
+            st.markdown("#### 📊 時段績效分析")
             hourly = analysis_results.get('hourly_performance', pd.DataFrame())
             if not hourly.empty:
                 fig = go.Figure()
@@ -674,11 +819,16 @@ class BacktestingTab:
                     name='時段 PnL',
                     marker_color=['green' if x > 0 else 'red' for x in hourly['total_pnl']]
                 ))
-                fig.update_layout(title="逐小時盈虧分布", xaxis_title="Hour (UTC)", yaxis_title="PnL ($)")
+                fig.update_layout(
+                    title="逐小時盈虧分布 (UTC)", 
+                    xaxis_title="Hour", 
+                    yaxis_title="PnL ($)",
+                    height=400
+                )
                 st.plotly_chart(fig, use_container_width=True)
             
             # 顯示機率分層
-            st.markdown("#### 機率分層分析")
+            st.markdown("#### 🎯 機率分層分析")
             layers = analysis_results.get('probability_layers', pd.DataFrame())
             if not layers.empty:
                 st.dataframe(layers, use_container_width=True)
@@ -688,29 +838,32 @@ class BacktestingTab:
             report_dir.mkdir(exist_ok=True)
             
             timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
-            html_path = report_dir / f"diagnostic_report_{model_version}_{timestamp}.html"
+            html_path = report_dir / f"diagnostic_report_{model_version}_{leverage}x_{timestamp}.html"
             
             analyzer.generate_html_report(html_path)
             
-            st.success(f"完整診斷報告已保存: {html_path}")
+            st.success(f"✅ 完整診斷報告已保存: {html_path}")
             
             # 下載按鈕
+            st.markdown("---")
             col1, col2 = st.columns(2)
             with col1:
                 trades_csv = trades_df.to_csv(index=False)
                 st.download_button(
-                    "下載交易記錄 CSV",
+                    "📥 下載交易記錄 CSV",
                     trades_csv,
-                    f"trades_{model_version}_{timestamp}.csv",
-                    "text/csv"
+                    f"trades_{model_version}_{leverage}x_{timestamp}.csv",
+                    "text/csv",
+                    use_container_width=True
                 )
             
             with col2:
                 with open(html_path, 'r', encoding='utf-8') as f:
                     html_content = f.read()
                 st.download_button(
-                    "下載診斷報告 HTML",
+                    "📥 下載診斷報告 HTML",
                     html_content,
-                    f"report_{model_version}_{timestamp}.html",
-                    "text/html"
+                    f"report_{model_version}_{leverage}x_{timestamp}.html",
+                    "text/html",
+                    use_container_width=True
                 )
