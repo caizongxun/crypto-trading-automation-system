@@ -33,6 +33,27 @@ streamlit run main.py
 
 ---
 
+## 🆕 Chronos Integration
+
+**Amazon Chronos** pre-trained time series models are now supported — no training required!
+
+```bash
+# Install Chronos dependencies
+pip install -r requirements.txt
+
+# Test the integration
+python test_chronos.py
+```
+
+In the GUI, select **Chronos** as model type in the backtesting tab:
+- `tiny`: Fastest, good for quick tests
+- `small`: Balanced speed/accuracy (recommended)
+- `base`: Highest accuracy
+
+📚 Read more: [Chronos Integration Guide](docs/CHRONOS_INTEGRATION.md)
+
+---
+
 ## Features
 
 - **V3 Neural Network Models**: Improved feature engineering with better probability calibration

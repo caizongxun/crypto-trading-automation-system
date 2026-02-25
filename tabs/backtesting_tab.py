@@ -14,6 +14,7 @@ from utils.agent_backtester import BidirectionalAgentBacktester
 from utils.adaptive_backtester import AdaptiveBacktester
 from utils.backtest_analyzer import BacktestAnalyzer
 from utils.feature_engineering import FeatureEngineer
+from utils.unified_backtester import UnifiedBacktester
 
 # 試圖載入 V2
 try:
@@ -21,6 +22,13 @@ try:
     V2_AVAILABLE = True
 except ImportError:
     V2_AVAILABLE = False
+
+# 試圖載入 Chronos
+try:
+    from models.chronos_predictor import ChronosPredictor  # noqa: F401
+    CHRONOS_AVAILABLE = True
+except ImportError:
+    CHRONOS_AVAILABLE = False
 
 logger = setup_logger('backtesting_tab', 'logs/backtesting_tab.log')
 
@@ -193,6 +201,31 @@ class BacktestingTab:
         
         st.markdown("---")
         
+        # 模型類型選擇
+        st.markdown("#### 模型類型")
+        model_type = st.selectbox(
+            "模型類型",
+            ["xgboost", "chronos"],
+            help="XGBoost: 自訓練模型 | Chronos: Amazon預訓練模型",
+            key="std_model_type"
+        )
+        
+        chronos_model_size = "small"
+        if model_type == "chronos":
+            if CHRONOS_AVAILABLE:
+                st.success("✅ Chronos 已安裝")
+            else:
+                st.warning("⚠️ Chronos 未安裝，請執行: pip install -r requirements.txt")
+            chronos_model_size = st.selectbox(
+                "Chronos 模型大小",
+                ["tiny", "small", "base"],
+                index=1,
+                help="tiny: 最快 | small: 平衡 (推薦) | base: 最準",
+                key="std_chronos_size"
+            )
+        
+        st.markdown("---")
+        
         # 新增: 回測期間和槓桿設定
         st.markdown("#### 回測設定")
         col1, col2 = st.columns(2)
@@ -311,6 +344,8 @@ class BacktestingTab:
                 long_model_path=models_dir / selected_long_model,
                 short_model_path=models_dir / selected_short_model,
                 model_version=model_version,
+                model_type=model_type,
+                chronos_model_size=chronos_model_size,
                 initial_capital=initial_capital,
                 position_size_pct=position_size_pct,
                 tp_pct=tp_pct,
@@ -523,8 +558,9 @@ class BacktestingTab:
                 leverage=leverage
             )
     
-    def run_standard_backtest(self, model_version='v1', backtest_days=180, leverage=1, **params):
-        logger.info(f"Starting standard backtest with {model_version} features, {backtest_days} days, {leverage}x leverage")
+    def run_standard_backtest(self, model_version='v1', backtest_days=180, leverage=1,
+                               model_type='xgboost', chronos_model_size='small', **params):
+        logger.info(f"Starting standard backtest: model_type={model_type}, {model_version} features, {backtest_days} days, {leverage}x leverage")
         
         with st.spinner("載入 1m K線..."):
             df_1m = self.load_klines("BTCUSDT", "1m", backtest_days=backtest_days)
@@ -536,71 +572,101 @@ class BacktestingTab:
                 df_1m['open_time'] = pd.to_datetime(df_1m['open_time'])
                 df_1m.set_index('open_time', inplace=True)
         
-        # 根據版本選擇 feature engineer
-        if model_version == 'v2' and V2_AVAILABLE:
-            with st.spinner("生成 V2 特徵 (44-54個)..."):
-                df_features = self.feature_engineer_v2.create_features_from_1m(
-                    df_1m, 
-                    use_adaptive_labels=False,
-                    label_type='both'
-                )
-                feature_cols = self.feature_engineer_v2.get_feature_list()
-        else:
-            with st.spinner("生成 V1 特徵 (9個)..."):
-                df_features = self.feature_engineer_v1.create_features_from_1m(
-                    df_1m, use_micro_structure=True, label_type='both'
-                )
-                feature_cols = [
-                    'efficiency_ratio', 'extreme_time_diff', 'vol_imbalance_ratio',
-                    'z_score', 'bb_width_pct', 'rsi', 'atr_pct', 'z_score_1h', 'atr_pct_1d'
-                ]
-        
-        # 只保留必要的特徵
-        df_features_filtered = df_features[feature_cols].copy()
-        
-        # 加入 OHLCV
-        for col in ['open', 'high', 'low', 'close', 'volume']:
-            if col in df_1m.columns:
-                df_features_filtered[col] = df_1m[col]
-        
-        split_idx = int(len(df_features_filtered) * 0.8)
-        df_test = df_features_filtered.iloc[split_idx:].copy()
-        
-        actual_backtest_days = len(df_test) / 1440
-        
-        st.info(
-            f"測試集: {len(df_test):,} 筆 ({actual_backtest_days:.1f} 天) | "
-            f"版本: {model_version.upper()} | 特徵數: {len(feature_cols)} | "
-            f"槓桿: {leverage}x"
-        )
-        
-        with st.spinner("執行回測..."):
-            backtester = BidirectionalAgentBacktester(
-                model_long_path=str(params['long_model_path']),
-                model_short_path=str(params['short_model_path']),
-                initial_capital=params['initial_capital'],
-                position_size_pct=params['position_size_pct'],
-                prob_threshold_long=params['prob_threshold_long'],
-                prob_threshold_short=params['prob_threshold_short'],
-                tp_pct=params['tp_pct'],
-                sl_pct=params['sl_pct'],
-                trading_hours=params['trading_hours']
+        if model_type == 'chronos':
+            # Chronos 模式: 直接使用 OHLCV 資料,不需要特徵工程
+            import torch
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            chronos_model_name = f"amazon/chronos-t5-{chronos_model_size}"
+            
+            split_idx = int(len(df_1m) * 0.8)
+            df_test = df_1m.iloc[split_idx:].copy()
+            actual_backtest_days = len(df_test) / 1440
+            
+            st.info(
+                f"測試集: {len(df_test):,} 筆 ({actual_backtest_days:.1f} 天) | "
+                f"模型: Chronos {chronos_model_size} | Device: {device} | 槓桿: {leverage}x"
             )
             
-            results = backtester.run(df_test, feature_cols)
-            
-            if results.get('total_trades', 0) > 0:
-                # 應用槓桿到報酬率
-                results['total_return_pct_leveraged'] = results['total_return_pct'] * leverage
-                results['leverage'] = leverage
-                results['backtest_days'] = actual_backtest_days
-                
-                self.display_results_with_analysis(
-                    backtester, results, params['long_model_path'], 
-                    params['short_model_path'], model_version
+            with st.spinner(f"執行 Chronos ({chronos_model_size}) 回測 (可能需要數分鐘)..."):
+                backtester = UnifiedBacktester(
+                    model_type='chronos',
+                    chronos_model_name=chronos_model_name,
+                    chronos_device=device,
+                    initial_capital=params['initial_capital'],
+                    position_size_pct=params['position_size_pct'],
+                    prob_threshold_long=params['prob_threshold_long'],
+                    prob_threshold_short=params['prob_threshold_short'],
+                    tp_pct=params['tp_pct'],
+                    sl_pct=params['sl_pct'],
+                    trading_hours=params['trading_hours']
                 )
+                
+                results = backtester.run(df_test)
+        else:
+            # XGBoost 模式: 使用特徵工程 + 訓練好的模型
+            if model_version == 'v2' and V2_AVAILABLE:
+                with st.spinner("生成 V2 特徵 (44-54個)..."):
+                    df_features = self.feature_engineer_v2.create_features_from_1m(
+                        df_1m, 
+                        use_adaptive_labels=False,
+                        label_type='both'
+                    )
+                    feature_cols = self.feature_engineer_v2.get_feature_list()
             else:
-                st.warning("沒有交易。請檢查 logs/agent_backtester.log")
+                with st.spinner("生成 V1 特徵 (9個)..."):
+                    df_features = self.feature_engineer_v1.create_features_from_1m(
+                        df_1m, use_micro_structure=True, label_type='both'
+                    )
+                    feature_cols = [
+                        'efficiency_ratio', 'extreme_time_diff', 'vol_imbalance_ratio',
+                        'z_score', 'bb_width_pct', 'rsi', 'atr_pct', 'z_score_1h', 'atr_pct_1d'
+                    ]
+            
+            # 只保留必要的特徵
+            df_features_filtered = df_features[feature_cols].copy()
+            
+            # 加入 OHLCV
+            for col in ['open', 'high', 'low', 'close', 'volume']:
+                if col in df_1m.columns:
+                    df_features_filtered[col] = df_1m[col]
+            
+            split_idx = int(len(df_features_filtered) * 0.8)
+            df_test = df_features_filtered.iloc[split_idx:].copy()
+            actual_backtest_days = len(df_test) / 1440
+            
+            st.info(
+                f"測試集: {len(df_test):,} 筆 ({actual_backtest_days:.1f} 天) | "
+                f"版本: {model_version.upper()} | 特徵數: {len(feature_cols)} | "
+                f"槓桿: {leverage}x"
+            )
+            
+            with st.spinner("執行回測..."):
+                backtester = UnifiedBacktester(
+                    model_type='xgboost',
+                    model_long_path=str(params['long_model_path']),
+                    model_short_path=str(params['short_model_path']),
+                    initial_capital=params['initial_capital'],
+                    position_size_pct=params['position_size_pct'],
+                    prob_threshold_long=params['prob_threshold_long'],
+                    prob_threshold_short=params['prob_threshold_short'],
+                    tp_pct=params['tp_pct'],
+                    sl_pct=params['sl_pct'],
+                    trading_hours=params['trading_hours']
+                )
+                
+                results = backtester.run(df_test, feature_cols)
+        
+        if results.get('total_trades', 0) > 0:
+            results['total_return_pct_leveraged'] = results['total_return_pct'] * leverage
+            results['leverage'] = leverage
+            results['backtest_days'] = actual_backtest_days
+            
+            self.display_results_with_analysis(
+                backtester, results, params.get('long_model_path', ''),
+                params.get('short_model_path', ''), model_version
+            )
+        else:
+            st.warning("沒有交易。請檢查 logs/ 目錄下的 log 檔案")
     
     def run_adaptive_backtest(self, model_version='v1', backtest_days=180, leverage=1, **params):
         logger.info(f"Starting adaptive backtest with {model_version} features, {backtest_days} days, {leverage}x leverage")

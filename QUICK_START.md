@@ -1,6 +1,8 @@
 # 🚀 快速啟動指南
 
-## ✨ 最新更新 (v1.2.0)
+## ✨ 最新更新 (v1.3.0)
+
+🆕 **Chronos 整合** — 支援 Amazon 預訓練時間序列模型，無需訓練直接使用！
 
 🆕 **GUI 模型管理** 功能已上線!
 
@@ -88,9 +90,22 @@ streamlit run main.py
 3. 選擇回測引擎:
    - 標準雙向智能體
    - 自適應智能體 (推薦)
-4. 設定參數 (使用預設即可)
-5. 點擊 **執行回測**
-6. 查看結果和報告
+4. **選擇模型類型**:
+   - **XGBoost**: 使用訓練好的模型 (需先訓練)
+   - **Chronos**: 使用 Amazon 預訓練模型 (無需訓練)
+5. 設定參數 (使用預設即可)
+6. 點擊 **執行回測**
+7. 查看結果和報告
+
+### 步驟 6 (選用): 使用 Chronos 快速回測
+
+無需訓練模型，直接使用 Amazon Chronos：
+
+1. 執行: `python test_chronos.py` 驗證安裝
+2. 點擊 **📈 策略回測** 標籤
+3. 在 **模型類型** 選擇 `chronos`
+4. 選擇模型大小 (推薦 `small`)
+5. 點擊 **執行標準回測**
 
 ---
 
@@ -102,6 +117,7 @@ streamlit run main.py
 | [MODEL_METADATA_FIX.md](MODEL_METADATA_FIX.md) | Metadata 修復說明 |
 | [CHANGELOG.md](CHANGELOG.md) | 版本更新記錄 |
 | [V2_INTEGRATION_COMPLETE.md](V2_INTEGRATION_COMPLETE.md) | V2 系統整合 |
+| [docs/CHRONOS_INTEGRATION.md](docs/CHRONOS_INTEGRATION.md) | Chronos 整合指南 |
 
 ---
 
@@ -317,8 +333,8 @@ echo "测試完成!"
 
 ---
 
-**版本**: 1.2.0  
-**最後更新**: 2026-02-24  
+**版本**: 1.3.0  
+**最後更新**: 2026-02-25  
 **作者**: Zong
 
 ---
