@@ -4,8 +4,13 @@ import numpy as np
 from chronos import ChronosPipeline
 from typing import Tuple, Optional
 import logging
+import sys
 
 logger = logging.getLogger(__name__)
+
+# 設定 HuggingFace logging
+logging.getLogger("transformers").setLevel(logging.INFO)
+logging.getLogger("huggingface_hub").setLevel(logging.INFO)
 
 
 class ChronosPredictor:
@@ -28,6 +33,12 @@ class ChronosPredictor:
             device: 'cuda' 或 'cpu'
         """
         logger.info(f"Loading Chronos model: {model_name} on {device}")
+        logger.info("⚠️ 首次使用會下載模型檔案，請稍候...")
+        
+        # 印出到 stdout 以便 Streamlit 可以捕獲
+        print(f"\n>>> 正在下載 {model_name} 模型...")
+        print(">>> 這可能需要 30-60 秒...")
+        sys.stdout.flush()
         
         self.pipeline = ChronosPipeline.from_pretrained(
             model_name,
@@ -36,6 +47,10 @@ class ChronosPredictor:
         )
         
         self.device = device
+        
+        print(">>> ✅ 模型載入完成!\n")
+        sys.stdout.flush()
+        
         logger.info("Chronos model loaded successfully")
     
     
@@ -131,11 +146,18 @@ class ChronosPredictor:
         prob_long_list = []
         prob_short_list = []
         
-        logger.info(f"Batch predicting {len(df) - lookback} samples...")
+        total_predictions = len(df) - lookback
+        logger.info(f"Batch predicting {total_predictions} samples...")
+        
+        print(f"\n>>> 正在執行 {total_predictions} 筆預測...")
+        sys.stdout.flush()
         
         for i in range(lookback, len(df)):
-            if i % 1000 == 0:
-                logger.info(f"Progress: {i}/{len(df)}")
+            if i % 100 == 0:
+                progress = (i - lookback) / total_predictions * 100
+                logger.info(f"Progress: {i}/{len(df)} ({progress:.1f}%)")
+                print(f">>> 進度: {progress:.1f}% ({i - lookback}/{total_predictions})")
+                sys.stdout.flush()
             
             window = df.iloc[i-lookback:i]
             prob_long, prob_short = self.predict_probabilities(
@@ -153,6 +175,9 @@ class ChronosPredictor:
         result = df.copy()
         result['prob_long'] = [np.nan] * lookback + prob_long_list
         result['prob_short'] = [np.nan] * lookback + prob_short_list
+        
+        print(">>> ✅ 批次預測完成!\n")
+        sys.stdout.flush()
         
         logger.info("Batch prediction completed")
         
