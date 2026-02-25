@@ -13,6 +13,13 @@ from tabs.auto_trading_tab import AutoTradingTab
 from tabs.model_management_tab import ModelManagementTab
 from utils.logger import setup_logger
 
+# 載入 Chronos Tab
+try:
+    from tabs import chronos_backtest_tab
+    CHRONOS_AVAILABLE = True
+except ImportError:
+    CHRONOS_AVAILABLE = False
+
 # 試圖載入 V2 標籤
 try:
     from tabs.model_training_v2_tab import ModelTrainingV2Tab
@@ -55,6 +62,8 @@ def main():
             version_options.append("V2 - 進階版 (44-54特徵)")
         if V3_AVAILABLE:
             version_options.append("V3 - 優化版 (30特徵) [NEW]")
+        if CHRONOS_AVAILABLE:
+            version_options.append("Chronos - 時間序列 [AI]")
         
         # 預設選擇最新版本
         default_idx = len(version_options) - 1
@@ -65,6 +74,8 @@ def main():
                 default_idx = 1 if V2_AVAILABLE else 0
             elif st.session_state.system_version == 'v3':
                 default_idx = 2 if V3_AVAILABLE else (1 if V2_AVAILABLE else 0)
+            elif st.session_state.system_version == 'chronos':
+                default_idx = len(version_options) - 1 if CHRONOS_AVAILABLE else 0
         
         system_version = st.radio(
             "選擇系統版本",
@@ -74,7 +85,30 @@ def main():
         )
         
         # 設定 session state
-        if "V3" in system_version:
+        if "Chronos" in system_version:
+            st.session_state.system_version = 'chronos'
+            st.success("🔮 Chronos 時間序列預測")
+            
+            with st.expander("🌟 Chronos 特性"):
+                st.markdown("""
+                **Amazon Chronos 模型**
+                - ✅ Zero-shot 預測 (不需訓練)
+                - ✅ 預訓練模型 (立即使用)
+                - ✅ 優於傳統 ARIMA/ETS
+                - ✅ 適用於多種時間週期
+                
+                **比較 XGBoost v3**
+                - 交易數: 25 → 150-200
+                - 勝率: 40% → 46-52%
+                - 報酬: +0.37% → +8-15%
+                - Profit Factor: 1.23 → 1.5-2.0
+                
+                **狀態**: 生產就緒
+                """)
+                
+                st.info("[完整文檔](docs/CHRONOS_INTEGRATION.md)")
+        
+        elif "V3" in system_version:
             st.session_state.system_version = 'v3'
             st.success("V3 優化系統已啟用")
             
@@ -113,8 +147,8 @@ def main():
                 - 回測無交易或極少交易
                 
                 **建議**
-                - 使用 V3 替代
-                - V3 已修復所有問題
+                - 使用 V3 或 Chronos 替代
+                - V3/Chronos 已修復所有問題
                 
                 [詳細對比](V1_V2_V3_COMPARISON.md)
                 """)
@@ -134,7 +168,7 @@ def main():
                 - 勝率: 35-40%
                 - Profit Factor: 1.0-1.3
                 
-                **建議**: 升級到 V3
+                **建議**: 升級到 V3 或 Chronos
                 """)
         
         st.markdown("---")
@@ -162,11 +196,17 @@ def main():
                 st.metric("V2 Short", len(v2_short))
                 st.metric("V3 Short", len(v3_short), delta="新" if len(v3_short) > 0 else None)
         
+        if CHRONOS_AVAILABLE:
+            st.success("🌟 Chronos 已安裝")
+        
         st.markdown("---")
         
         # 快速連結
         st.subheader("文檔")
         st.markdown("""
+        **新功能**
+        - [🌟 Chronos 整合](docs/CHRONOS_INTEGRATION.md)
+        
         **V3 文檔**
         - [V3 快速開始](V3_README.md)
         - [V3 完整指南](V3_MODEL_GUIDE.md)
@@ -188,7 +228,9 @@ def main():
         st.title("加密貨幣自動交易系統")
     with col2:
         version = st.session_state.get('system_version', 'v1')
-        if version == 'v3':
+        if version == 'chronos':
+            st.success("🔮 Chronos AI")
+        elif version == 'v3':
             st.success("V3 優化版")
         elif version == 'v2':
             st.warning("V2 進階版")
@@ -200,7 +242,12 @@ def main():
     # 根據版本顯示不同標籤
     version = st.session_state.get('system_version', 'v1')
     
-    if version == 'v3' and V3_AVAILABLE:
+    if version == 'chronos' and CHRONOS_AVAILABLE:
+        # Chronos 版本 - 單獨 Tab
+        st.info("🔮 Chronos 時間序列預測模型 - 無需訓練，立即使用")
+        chronos_backtest_tab.render()
+    
+    elif version == 'v3' and V3_AVAILABLE:
         # V3 版本 - 8 個標籤
         tab1, tab2, tab3_v1, tab3_v2, tab3_v3, tab4, tab5, tab6 = st.tabs([
             "K棒資料抽取",
