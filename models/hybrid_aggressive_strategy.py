@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 混合激進策略 - 30天翻倉目標
 
@@ -6,6 +7,11 @@
 目標: 30天內資金翻倍
 策略: 高頻 + 動態倒金字塔 + 激進風控
 """
+
+import sys
+import os
+if sys.platform == 'win32':
+    os.environ['PYTHONIOENCODING'] = 'utf-8'
 
 import numpy as np
 import pandas as pd
@@ -32,8 +38,8 @@ class HybridAggressiveStrategy:
         initial_capital: float = 10000,
         target_multiplier: float = 2.0,  # 30天翻倍
         target_days: int = 30,
-        base_position_pct: float = 20.0,  # 基礎仓位 20%
-        max_position_pct: float = 50.0,   # 最大仓位 50%
+        base_position_pct: float = 20.0,  # 基礎倉位 20%
+        max_position_pct: float = 50.0,   # 最大倉位 50%
         use_martingale: bool = True,      # 使用倒金字塔
         max_martingale_level: int = 3,    # 最大加倍次數
     ):
@@ -55,7 +61,7 @@ class HybridAggressiveStrategy:
         self.daily_target = self._calculate_daily_target()
         
         logger.info(f"Initialized HybridAggressiveStrategy")
-        logger.info(f"Target: ${initial_capital:,.0f} → ${initial_capital * target_multiplier:,.0f} in {target_days} days")
+        logger.info(f"Target: ${initial_capital:,.0f} -> ${initial_capital * target_multiplier:,.0f} in {target_days} days")
         logger.info(f"Daily target return: {self.daily_target:.2f}%")
     
     
@@ -79,23 +85,23 @@ class HybridAggressiveStrategy:
             is_winning_streak: 是否連勝
         
         Returns:
-            仓位百分比 (%)
+            倉位百分比 (%)
         """
         if not self.use_martingale:
             return self.base_position_pct
         
-        # 連輸後加倍仓位
+        # 連輸後加倍倉位
         if self.consecutive_losses > 0:
             martingale_level = min(self.consecutive_losses, self.max_martingale_level)
             position_pct = self.base_position_pct * (2 ** martingale_level)
             position_pct = min(position_pct, self.max_position_pct)
-            logger.info(f"📈 Martingale Level {martingale_level}: {position_pct:.1f}% position")
+            logger.info(f"[MARTINGALE] Level {martingale_level}: {position_pct:.1f}% position")
             return position_pct
         
-        # 連勝後加仓 (Anti-Martingale)
+        # 連勝後加倉 (Anti-Martingale)
         elif is_winning_streak and self.winning_trades >= 3:
             position_pct = min(self.base_position_pct * 1.5, self.max_position_pct)
-            logger.info(f"🚀 Winning streak: {position_pct:.1f}% position")
+            logger.info(f"[WINNING] Winning streak: {position_pct:.1f}% position")
             return position_pct
         
         return self.base_position_pct
@@ -219,10 +225,10 @@ class HybridAggressiveStrategy:
         if is_win:
             self.winning_trades += 1
             self.consecutive_losses = 0
-            logger.info(f"✅ Win #{self.winning_trades}/{self.total_trades} | PnL: +{pnl:.2f}%")
+            logger.info(f"[WIN] Win #{self.winning_trades}/{self.total_trades} | PnL: +{pnl:.2f}%")
         else:
             self.consecutive_losses += 1
-            logger.warning(f"❌ Loss (streak: {self.consecutive_losses}) | PnL: {pnl:.2f}%")
+            logger.warning(f"[LOSS] Loss (streak: {self.consecutive_losses}) | PnL: {pnl:.2f}%")
         
         # 更新資金
         self.current_capital *= (1 + pnl / 100)
@@ -233,8 +239,8 @@ class HybridAggressiveStrategy:
         target_progress = self.daily_target * days_elapsed
         
         if days_elapsed > 0:
-            logger.info(f"📊 Progress: {progress:.1f}% (Target: {target_progress:.1f}%)")
-            logger.info(f"💰 Capital: ${self.current_capital:,.2f} / ${self.initial_capital * self.target_multiplier:,.2f}")
+            logger.info(f"[PROGRESS] Progress: {progress:.1f}% (Target: {target_progress:.1f}%)")
+            logger.info(f"[CAPITAL] Capital: ${self.current_capital:,.2f} / ${self.initial_capital * self.target_multiplier:,.2f}")
     
     
     def get_stats(self) -> Dict[str, Any]:
