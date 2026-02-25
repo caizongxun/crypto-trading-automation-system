@@ -42,7 +42,7 @@ def main():
     
     # 側邊欄 - 版本選擇
     with st.sidebar:
-        st.title("🤖 AI 交易系統")
+        st.title("AI 交易系統")
         
         st.markdown("---")
         
@@ -54,7 +54,7 @@ def main():
         if V2_AVAILABLE:
             version_options.append("V2 - 進階版 (44-54特徵)")
         if V3_AVAILABLE:
-            version_options.append("V3 - 優化版 (30特徵) ⭐")
+            version_options.append("V3 - 優化版 (30特徵) [NEW]")
         
         # 預設選擇最新版本
         default_idx = len(version_options) - 1
@@ -76,18 +76,18 @@ def main():
         # 設定 session state
         if "V3" in system_version:
             st.session_state.system_version = 'v3'
-            st.success("✅ V3 優化系統已啟用")
+            st.success("V3 優化系統已啟用")
             
             # V3 特性說明
-            with st.expander("📊 V3 新特性"):
+            with st.expander("V3 新特性"):
                 st.markdown("""
                 **核心改進**
-                - ✨ 更激進的標籤 (1.2% TP vs 2%)
-                - ✨ 更高的信號率 (5-10% vs <2%)
-                - ✨ 更好的機率校準 (Max 0.6-0.8)
-                - 🎯 30個精選特徵
-                - 🎯 4小時 lookahead
-                - 🎯 部分盈利條件
+                - 更激進的標籤 (1.2% TP vs 2%)
+                - 更高的信號率 (5-10% vs <2%)
+                - 更好的機率校準 (Max 0.6-0.8)
+                - 30個精選特徵
+                - 4小時 lookahead
+                - 部分盈利條件
                 
                 **預期效果**
                 - 交易數: 150-300 (90天)
@@ -95,17 +95,17 @@ def main():
                 - Profit Factor: 1.5-2.5
                 - 總報酬: 5-15% (90天, 1x)
                 
-                **狀態**: ✅ 生產就緒
+                **狀態**: 生產就緒
                 """)
                 
-                st.info("📚 [完整文檔](V3_MODEL_GUIDE.md)")
+                st.info("[完整文檔](V3_MODEL_GUIDE.md)")
         
         elif "V2" in system_version:
             st.session_state.system_version = 'v2'
-            st.warning("⚠️ V2 系統有已知問題")
+            st.warning("V2 系統有已知問題")
             
             # V2 問題說明
-            with st.expander("⚠️ V2 已知問題"):
+            with st.expander("V2 已知問題"):
                 st.markdown("""
                 **問題**
                 - 機率分佈異常 (Max 0.21)
@@ -116,14 +116,14 @@ def main():
                 - 使用 V3 替代
                 - V3 已修復所有問題
                 
-                📚 [詳細對比](V1_V2_V3_COMPARISON.md)
+                [詳細對比](V1_V2_V3_COMPARISON.md)
                 """)
         
         else:
             st.session_state.system_version = 'v1'
-            st.info("ℹ️ V1 基礎系統已啟用")
+            st.info("V1 基礎系統已啟用")
             
-            with st.expander("📊 V1 特性"):
+            with st.expander("V1 特性"):
                 st.markdown("""
                 **特性**
                 - 9 個基礎特徵
@@ -140,7 +140,7 @@ def main():
         st.markdown("---")
         
         # 系統狀態
-        st.subheader("📊 系統狀態")
+        st.subheader("系統狀態")
         
         # 模型狀態
         models_dir = Path("models_output")
@@ -165,18 +165,18 @@ def main():
         st.markdown("---")
         
         # 快速連結
-        st.subheader("📚 文檔")
+        st.subheader("文檔")
         st.markdown("""
         **V3 文檔**
-        - [🚀 V3 快速開始](V3_README.md)
-        - [📖 V3 完整指南](V3_MODEL_GUIDE.md)
-        - [🔍 版本比較](V1_V2_V3_COMPARISON.md)
-        - [📝 V3 Changelog](CHANGELOG_V3.md)
+        - [V3 快速開始](V3_README.md)
+        - [V3 完整指南](V3_MODEL_GUIDE.md)
+        - [版本比較](V1_V2_V3_COMPARISON.md)
+        - [V3 Changelog](CHANGELOG_V3.md)
         
         **其他文檔**
-        - [🎯 策略優化](STRATEGY_OPTIMIZATION_GUIDE.md)
-        - [📖 Metadata Fix](MODEL_METADATA_FIX.md)
-        - [📝 Changelog](CHANGELOG.md)
+        - [策略優化](STRATEGY_OPTIMIZATION_GUIDE.md)
+        - [Metadata Fix](MODEL_METADATA_FIX.md)
+        - [Changelog](CHANGELOG.md)
         """)
         
         st.markdown("---")
@@ -185,15 +185,15 @@ def main():
     # 主頁面標題
     col1, col2 = st.columns([3, 1])
     with col1:
-        st.title("💹 加密貨幣自動交易系統")
+        st.title("加密貨幣自動交易系統")
     with col2:
         version = st.session_state.get('system_version', 'v1')
         if version == 'v3':
-            st.success("⭐ V3 優化版")
+            st.success("V3 優化版")
         elif version == 'v2':
-            st.warning("⚠️ V2 進階版")
+            st.warning("V2 進階版")
         else:
-            st.info("📌 V1 基礎版")
+            st.info("V1 基礎版")
     
     st.markdown("---")
     
@@ -203,14 +203,14 @@ def main():
     if version == 'v3' and V3_AVAILABLE:
         # V3 版本 - 8 個標籤
         tab1, tab2, tab3_v1, tab3_v2, tab3_v3, tab4, tab5, tab6 = st.tabs([
-            "📊 K棒資料抽取",
-            "🔧 特徵工程",
-            "🎯 V1 模型訓練",
-            "🔄 V2 模型訓練",
-            "⭐ V3 模型訓練",
-            "📈 策略回測",
-            "🤖 自動交易",
-            "📦 模型管理"
+            "K棒資料抽取",
+            "特徵工程",
+            "V1 模型訓練",
+            "V2 模型訓練",
+            "V3 模型訓練",
+            "策略回測",
+            "自動交易",
+            "模型管理"
         ])
         
         with tab1:
@@ -223,13 +223,13 @@ def main():
         
         with tab3_v1:
             logger.info("Loading V1 Model Training Tab")
-            st.info("ℹ️ V1 模型訓練 (9 個特徵)")
+            st.info("V1 模型訓練 (9 個特徵)")
             ModelTrainingTab().render()
         
         with tab3_v2:
             logger.info("Loading V2 Model Training Tab")
             if V2_AVAILABLE:
-                st.warning("⚠️ V2 有已知問題,建議使用 V3")
+                st.warning("V2 有已知問題,建議使用 V3")
                 ModelTrainingV2Tab().render()
             else:
                 st.error("V2 模組未安裝")
@@ -253,13 +253,13 @@ def main():
     elif version == 'v2' and V2_AVAILABLE:
         # V2 版本 - 7 個標籤
         tab1, tab2, tab3, tab3_v2, tab4, tab5, tab6 = st.tabs([
-            "📊 K棒資料抽取",
-            "🔧 特徵工程",
-            "🎯 V1 模型訓練",
-            "🚀 V2 模型訓練",
-            "📈 策略回測",
-            "🤖 自動交易",
-            "📦 模型管理"
+            "K棒資料抽取",
+            "特徵工程",
+            "V1 模型訓練",
+            "V2 模型訓練",
+            "策略回測",
+            "自動交易",
+            "模型管理"
         ])
         
         with tab1:
@@ -272,7 +272,7 @@ def main():
         
         with tab3:
             logger.info("Loading V1 Model Training Tab")
-            st.info("ℹ️ V1 模型訓練 (9 個特徵)")
+            st.info("V1 模型訓練 (9 個特徵)")
             ModelTrainingTab().render()
         
         with tab3_v2:
@@ -294,12 +294,12 @@ def main():
     else:
         # V1 版本 - 6 個標籤
         tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-            "📊 K棒資料抽取",
-            "🔧 特徵工程",
-            "🎯 模型訓練",
-            "📈 策略回測",
-            "🤖 自動交易",
-            "📦 模型管理"
+            "K棒資料抽取",
+            "特徵工程",
+            "模型訓練",
+            "策略回測",
+            "自動交易",
+            "模型管理"
         ])
         
         with tab1:
