@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-v10 高頻剝頭皮策略
+v10 高頻剝頭皮策略 (使用 15m 數據)
 
 核心理念:
-1. 5m 時間框架 - 更多交易機會
-2. 小目標小止損 - TP=0.3%, SL=0.2%
-3. 快進快出 - 持有 1-3 根K線
-4. 高頻率 - 每天 10-20 筆交易
+1. 15m 時間框架 (HuggingFace 有數據)
+2. 小目標小止損 - TP=0.4%, SL=0.25%
+3. 快進快出 - 持有 1-2 根K線
+4. 高頻率 - 每天 5-10 筆交易
 5. 勝率優先 - 目標 55-60% 勝率
 
 標籤定義:
-- 成功: 未來 3 根K線內上漲/下跌 >= 0.3%, 且未觸及 0.2% 止損
-- 失敗: 觸及止損或 3 根內未達目標
+- 成功: 未來 2 根K線內上漲/下跌 >= 0.4%, 且未觸及 0.25% 止損
+- 失敗: 觸及止損或 2 根內未達目標
 
 特徵重點:
 - 短期動量 (1-3 根)
@@ -50,9 +50,9 @@ logger = logging.getLogger(__name__)
 
 def create_scalping_labels(
     df: pd.DataFrame,
-    tp_pct: float = 0.003,
-    sl_pct: float = 0.002,
-    horizon: int = 3
+    tp_pct: float = 0.004,
+    sl_pct: float = 0.0025,
+    horizon: int = 2
 ):
     """
     創建剝頭皮標籤
@@ -100,9 +100,7 @@ def create_scalping_labels(
 
 
 def calculate_microstructure_features(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    計算微觀結構特徵 - 適合高頻交易
-    """
+    """計算微觀結構特徵 - 適合高頻交易"""
     features = pd.DataFrame(index=df.index)
     
     close = df['close']
@@ -234,13 +232,10 @@ def calculate_microstructure_features(df: pd.DataFrame) -> pd.DataFrame:
     # === 時間特徵 ===
     if 'open_time' in df.columns:
         hour = pd.to_datetime(df['open_time']).dt.hour
-        minute = pd.to_datetime(df['open_time']).dt.minute
     elif isinstance(df.index, pd.DatetimeIndex):
         hour = df.index.hour
-        minute = df.index.minute
     else:
         hour = pd.Series(12, index=df.index)
-        minute = pd.Series(0, index=df.index)
     
     # 高流動性時段
     features['high_liquidity_hour'] = (
@@ -254,17 +249,15 @@ def calculate_microstructure_features(df: pd.DataFrame) -> pd.DataFrame:
 
 def train_v10_model(
     symbol: str = 'BTCUSDT',
-    timeframe: str = '5m',
+    timeframe: str = '15m',
     days: int = 365,
-    tp_pct: float = 0.003,
-    sl_pct: float = 0.002,
-    horizon: int = 3,
+    tp_pct: float = 0.004,
+    sl_pct: float = 0.0025,
+    horizon: int = 2,
     train_ratio: float = 0.8,
     val_ratio: float = 0.1
 ):
-    """
-    訓練 v10 高頻剝頭皮模型
-    """
+    """訓練 v10 高頻剝頭皮模型"""
     logger.info("="*80)
     logger.info("[START] Training v10 Model - High Frequency Scalping")
     logger.info("="*80)
@@ -274,7 +267,7 @@ def train_v10_model(
     logger.info(f"  - TP: {tp_pct:.2%}")
     logger.info(f"  - SL: {sl_pct:.2%}")
     logger.info(f"  - RR ratio: {tp_pct / sl_pct:.2f}")
-    logger.info(f"  - Horizon: {horizon} bars")
+    logger.info(f"  - Horizon: {horizon} bars ({horizon * 15} minutes)")
     logger.info("")
     
     # 載入數據
@@ -432,11 +425,11 @@ if __name__ == '__main__':
     
     parser = argparse.ArgumentParser(description='Train v10 high frequency scalping model')
     parser.add_argument('--symbol', type=str, default='BTCUSDT')
-    parser.add_argument('--timeframe', type=str, default='5m')
+    parser.add_argument('--timeframe', type=str, default='15m')
     parser.add_argument('--days', type=int, default=365)
-    parser.add_argument('--tp-pct', type=float, default=0.003, help='Take profit %')
-    parser.add_argument('--sl-pct', type=float, default=0.002, help='Stop loss %')
-    parser.add_argument('--horizon', type=int, default=3)
+    parser.add_argument('--tp-pct', type=float, default=0.004, help='Take profit % (default 0.4%)')
+    parser.add_argument('--sl-pct', type=float, default=0.0025, help='Stop loss % (default 0.25%)')
+    parser.add_argument('--horizon', type=int, default=2, help='Horizon in bars (default 2 = 30 min)')
     parser.add_argument('--train-ratio', type=float, default=0.8)
     parser.add_argument('--val-ratio', type=float, default=0.1)
     
