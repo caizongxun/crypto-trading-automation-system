@@ -40,21 +40,9 @@ logger = logging.getLogger(__name__)
 
 
 def calculate_keltner_channels(df: pd.DataFrame, ema_period: int = 20, atr_period: int = 14, multiplier: float = 2.0):
-    """
-    計算肯特納通道
-    
-    Args:
-        ema_period: EMA 週期
-        atr_period: ATR 週期
-        multiplier: ATR 倍數
-    
-    Returns:
-        upper, middle, lower bands
-    """
-    # 計算 EMA
+    """計算肯特納通道"""
     middle = df['close'].ewm(span=ema_period, adjust=False).mean()
     
-    # 計算 ATR
     tr = pd.concat([
         df['high'] - df['low'],
         abs(df['high'] - df['close'].shift(1)),
@@ -62,8 +50,6 @@ def calculate_keltner_channels(df: pd.DataFrame, ema_period: int = 20, atr_perio
     ], axis=1).max(axis=1)
     
     atr = tr.rolling(atr_period).mean()
-    
-    # 計算通道
     upper = middle + (atr * multiplier)
     lower = middle - (atr * multiplier)
     
@@ -71,126 +57,85 @@ def calculate_keltner_channels(df: pd.DataFrame, ema_period: int = 20, atr_perio
 
 
 def identify_touch_events(df: pd.DataFrame, upper: pd.Series, lower: pd.Series, threshold: float = 0.003):
-    """
-    識別觸碰通道邊界的事件
-    
-    Args:
-        threshold: 距離閾值 (0.3% 內算觸碰)
-    
-    Returns:
-        upper_touch, lower_touch (boolean Series)
-    """
-    # 計算距離
+    """識別觸碰通道邊界的事件"""
     dist_to_upper = (upper - df['close']) / df['close']
     dist_to_lower = (df['close'] - lower) / df['close']
     
-    # 觸碰上軌 (接近上軌)
     upper_touch = (dist_to_upper <= threshold) & (dist_to_upper >= -threshold)
-    
-    # 觸碰下軌 (接近下軌)
     lower_touch = (dist_to_lower <= threshold) & (dist_to_lower >= -threshold)
     
     return upper_touch, lower_touch
 
 
 def calculate_bounce_features(df: pd.DataFrame, upper: pd.Series, middle: pd.Series, lower: pd.Series) -> pd.DataFrame:
-    """
-    計算反彈相關特徵
-    
-    關鍵特徵:
-    1. 當前在通道中的位置
-    2. 接近邊界的速度和角度
-    3. 成交量特徵
-    4. 市場動能
-    5. 波動率狀態
-    """
+    """計算反彈相關特徵"""
     features = pd.DataFrame(index=df.index)
     
-    # === 1. 通道位置特徵 ===
+    # 通道位置
     channel_width = upper - lower
     features['position_in_channel'] = (df['close'] - lower) / (channel_width + 1e-8)
     features['dist_to_upper'] = (upper - df['close']) / df['close']
     features['dist_to_lower'] = (df['close'] - lower) / df['close']
     features['dist_to_middle'] = (df['close'] - middle) / middle
     
-    # === 2. 接近速度 (動量) ===
-    # 最近 3 根 K 線的價格變化
+    # 動量
     features['momentum_1'] = df['close'].pct_change(1)
     features['momentum_2'] = df['close'].pct_change(2)
     features['momentum_3'] = df['close'].pct_change(3)
-    
-    # 加速度 (momentum 的變化)
     features['acceleration'] = features['momentum_1'] - features['momentum_1'].shift(1)
     
-    # === 3. K 線形態 ===
+    # K線形態
     high_low_range = df['high'] - df['low'] + 1e-8
-    
-    # 實體大小
     body = abs(df['close'] - df['open'])
     features['body_ratio'] = body / high_low_range
     
-    # 上下影線
     upper_shadow = df['high'] - df[['close', 'open']].max(axis=1)
     lower_shadow = df[['close', 'open']].min(axis=1) - df['low']
     features['upper_shadow_ratio'] = upper_shadow / high_low_range
     features['lower_shadow_ratio'] = lower_shadow / high_low_range
-    
-    # 買賣壓力
     features['buy_pressure'] = (df['close'] - df['low']) / high_low_range
     
-    # === 4. 成交量特徵 ===
+    # 成交量
     vol_ma6 = df['volume'].rolling(6).mean()
     vol_ma24 = df['volume'].rolling(24).mean()
-    
     features['volume_ratio_6'] = df['volume'] / (vol_ma6 + 1e-8)
     features['volume_ratio_24'] = df['volume'] / (vol_ma24 + 1e-8)
     
-    # 價量配合
     price_change = df['close'].pct_change()
     features['volume_price_corr'] = price_change.rolling(6).corr(df['volume'].pct_change())
     
-    # === 5. 波動率 ===
+    # 波動率
     features['volatility'] = df['close'].pct_change().rolling(6).std()
     features['volatility_24h'] = df['close'].pct_change().rolling(24).std()
     features['volatility_expanding'] = (features['volatility'] > features['volatility_24h']).astype(int)
     
-    # === 6. 通道寬度變化 ===
+    # 通道特徵
     features['channel_width'] = (upper - lower) / middle
     features['channel_width_change'] = features['channel_width'].pct_change(3)
-    
-    # === 7. 趨勢強度 ===
-    # 中軌斜率
     features['middle_slope'] = middle.pct_change(3)
-    
-    # 價格距離中軌的偏離度
     features['deviation_from_middle'] = abs(df['close'] - middle) / middle
     
-    # === 8. 歷史反彈成功率特徵 ===
-    # 過去 24 小時內觸碰次數
+    # 歷史觸碰
     dist_to_upper_abs = abs((upper - df['close']) / df['close'])
     dist_to_lower_abs = abs((df['close'] - lower) / df['close'])
-    
     near_upper = (dist_to_upper_abs < 0.005).astype(int)
     near_lower = (dist_to_lower_abs < 0.005).astype(int)
-    
     features['upper_touches_24h'] = near_upper.rolling(24).sum()
     features['lower_touches_24h'] = near_lower.rolling(24).sum()
     
-    # === 9. RSI-like 指標 ===
-    # 簡化版 RSI
+    # RSI
     price_changes = df['close'].diff()
     gains = price_changes.where(price_changes > 0, 0).rolling(14).mean()
     losses = -price_changes.where(price_changes < 0, 0).rolling(14).mean()
     features['rsi_like'] = 100 - (100 / (1 + gains / (losses + 1e-8)))
     
-    # === 10. 時間特徵 ===
+    # 時間
     if 'open_time' in df.columns:
         hour = pd.to_datetime(df['open_time']).dt.hour
     elif isinstance(df.index, pd.DatetimeIndex):
         hour = df.index.hour
     else:
         hour = pd.Series(12, index=df.index)
-    
     features['is_high_vol_time'] = ((hour >= 8) & (hour < 16)).astype(int)
     
     return features
@@ -201,43 +146,28 @@ def create_bounce_labels(
     upper_touch: pd.Series,
     lower_touch: pd.Series,
     horizon: int = 4,
-    bounce_threshold: float = 0.008  # 反彈至少 0.8%
+    bounce_threshold: float = 0.008
 ):
-    """
-    創建反彈標籤
-    
-    邏輯:
-    - 上軌觸碰: 如果未來 horizon 小時內價格回落 >= bounce_threshold,標記為 1 (有效反彈向下)
-    - 下軌觸碰: 如果未來 horizon 小時內價格反彈 >= bounce_threshold,標記為 1 (有效反彈向上)
-    
-    Returns:
-        upper_bounce_labels, lower_bounce_labels
-    """
+    """創建反彈標籤"""
     upper_bounce_labels = pd.Series(0, index=df.index)
     lower_bounce_labels = pd.Series(0, index=df.index)
     
     for i in range(len(df) - horizon):
-        # 上軌觸碰: 看是否反彈向下
         if upper_touch.iloc[i]:
             entry_price = df['close'].iloc[i]
             future_lows = df['low'].iloc[i+1:i+1+horizon]
-            
             if len(future_lows) > 0:
                 lowest = future_lows.min()
                 drop_pct = (entry_price - lowest) / entry_price
-                
                 if drop_pct >= bounce_threshold:
                     upper_bounce_labels.iloc[i] = 1
         
-        # 下軌觸碰: 看是否反彈向上
         if lower_touch.iloc[i]:
             entry_price = df['close'].iloc[i]
             future_highs = df['high'].iloc[i+1:i+1+horizon]
-            
             if len(future_highs) > 0:
                 highest = future_highs.max()
                 rise_pct = (highest - entry_price) / entry_price
-                
                 if rise_pct >= bounce_threshold:
                     lower_bounce_labels.iloc[i] = 1
     
@@ -251,7 +181,9 @@ def train_v7_model(
     ema_period: int = 20,
     atr_period: int = 14,
     multiplier: float = 2.0,
-    horizon: int = 4
+    horizon: int = 4,
+    train_ratio: float = 0.7,
+    val_ratio: float = 0.15
 ):
     """訓練 v7 肯特納反彈模型"""
     logger.info("="*80)
@@ -261,7 +193,8 @@ def train_v7_model(
     logger.info(f"Timeframe: {timeframe}")
     logger.info(f"Days: {days}")
     logger.info(f"Keltner: EMA={ema_period}, ATR={atr_period}, Multiplier={multiplier}")
-    logger.info(f"Horizon: {horizon}h")
+    logger.info(f"Horizon: {horizon} bars")
+    logger.info(f"Data split: Train={train_ratio:.0%}, Val={val_ratio:.0%}, Test={1-train_ratio-val_ratio:.0%}")
     logger.info("")
     
     # 1. 載入數據
@@ -305,7 +238,6 @@ def train_v7_model(
         df, upper_touch, lower_touch, horizon
     )
     
-    # 只保留有觸碰事件的樣本
     upper_samples = upper_touch
     lower_samples = lower_touch
     
@@ -317,26 +249,22 @@ def train_v7_model(
     # 6. 準備訓練數據
     logger.info("\nStep 6/7: Preparing training data...")
     
-    # 清理特徵
     features = features.fillna(0)
     features = features.replace([np.inf, -np.inf], 0)
     
-    # Upper band model (預測從上軌反彈向下)
     X_upper = features[upper_samples].copy()
     y_upper = upper_bounce_labels[upper_samples].copy()
-    
-    # Lower band model (預測從下軌反彈向上)
     X_lower = features[lower_samples].copy()
     y_lower = lower_bounce_labels[lower_samples].copy()
     
     logger.info(f"Upper model training samples: {len(X_upper)}")
     logger.info(f"Lower model training samples: {len(X_lower)}")
     
-    # 時間序列切分
-    def time_split(X, y, train_ratio=0.7, val_ratio=0.15):
+    # 時間序列切分 (使用自定義比例)
+    def time_split(X, y, train_r, val_r):
         n = len(X)
-        train_end = int(n * train_ratio)
-        val_end = int(n * (train_ratio + val_ratio))
+        train_end = int(n * train_r)
+        val_end = int(n * (train_r + val_r))
         
         X_train = X.iloc[:train_end]
         y_train = y.iloc[:train_end]
@@ -353,22 +281,24 @@ def train_v7_model(
     results = {}
     
     # Upper band model (Short signal)
-    if len(X_upper) >= 100:  # 至少需要 100 個樣本
+    if len(X_upper) >= 100:
         logger.info("\n[UPPER BAND] Training short signal model...")
-        X_train, X_val, X_test, y_train, y_val, y_test = time_split(X_upper, y_upper)
+        X_train, X_val, X_test, y_train, y_val, y_test = time_split(X_upper, y_upper, train_ratio, val_ratio)
         
-        logger.info(f"  Train: {len(X_train)}, Val: {len(X_val)}, Test: {len(X_test)}")
+        logger.info(f"  Train: {len(X_train)} ({len(X_train)/len(X_upper):.1%})")
+        logger.info(f"  Val: {len(X_val)} ({len(X_val)/len(X_upper):.1%})")
+        logger.info(f"  Test (OOS): {len(X_test)} ({len(X_test)/len(X_upper):.1%})")
         
         model_upper = CatBoostClassifier(
-            iterations=500,
-            learning_rate=0.05,
-            depth=4,
+            iterations=800,
+            learning_rate=0.03,
+            depth=5,
             l2_leaf_reg=5,
             loss_function='Logloss',
             eval_metric='AUC',
             random_seed=42,
-            verbose=50,
-            early_stopping_rounds=50,
+            verbose=100,
+            early_stopping_rounds=100,
             auto_class_weights='Balanced'
         )
         
@@ -378,7 +308,6 @@ def train_v7_model(
             use_best_model=True
         )
         
-        # 評估
         pred_proba = model_upper.predict_proba(X_test)[:, 1]
         pred_binary = (pred_proba >= 0.5).astype(int)
         
@@ -387,13 +316,13 @@ def train_v7_model(
         recall = recall_score(y_test, pred_binary, zero_division=0)
         f1 = f1_score(y_test, pred_binary, zero_division=0)
         
-        logger.info(f"\n  Test Results:")
+        logger.info(f"\n  Test (OOS) Results:")
         logger.info(f"    AUC: {auc:.4f}")
         logger.info(f"    Precision: {precision:.4f}")
         logger.info(f"    Recall: {recall:.4f}")
         logger.info(f"    F1: {f1:.4f}")
-        logger.info(f"    Positive rate: {y_test.mean():.2%}")
-        logger.info(f"    Predicted positive: {pred_binary.mean():.2%}")
+        logger.info(f"    Actual positive rate: {y_test.mean():.2%}")
+        logger.info(f"    Predicted positive rate: {pred_binary.mean():.2%}")
         
         results['upper'] = {
             'model': model_upper,
@@ -409,20 +338,22 @@ def train_v7_model(
     # Lower band model (Long signal)
     if len(X_lower) >= 100:
         logger.info("\n[LOWER BAND] Training long signal model...")
-        X_train, X_val, X_test, y_train, y_val, y_test = time_split(X_lower, y_lower)
+        X_train, X_val, X_test, y_train, y_val, y_test = time_split(X_lower, y_lower, train_ratio, val_ratio)
         
-        logger.info(f"  Train: {len(X_train)}, Val: {len(X_val)}, Test: {len(X_test)}")
+        logger.info(f"  Train: {len(X_train)} ({len(X_train)/len(X_lower):.1%})")
+        logger.info(f"  Val: {len(X_val)} ({len(X_val)/len(X_lower):.1%})")
+        logger.info(f"  Test (OOS): {len(X_test)} ({len(X_test)/len(X_lower):.1%})")
         
         model_lower = CatBoostClassifier(
-            iterations=500,
-            learning_rate=0.05,
-            depth=4,
+            iterations=800,
+            learning_rate=0.03,
+            depth=5,
             l2_leaf_reg=5,
             loss_function='Logloss',
             eval_metric='AUC',
             random_seed=42,
-            verbose=50,
-            early_stopping_rounds=50,
+            verbose=100,
+            early_stopping_rounds=100,
             auto_class_weights='Balanced'
         )
         
@@ -432,7 +363,6 @@ def train_v7_model(
             use_best_model=True
         )
         
-        # 評估
         pred_proba = model_lower.predict_proba(X_test)[:, 1]
         pred_binary = (pred_proba >= 0.5).astype(int)
         
@@ -441,13 +371,13 @@ def train_v7_model(
         recall = recall_score(y_test, pred_binary, zero_division=0)
         f1 = f1_score(y_test, pred_binary, zero_division=0)
         
-        logger.info(f"\n  Test Results:")
+        logger.info(f"\n  Test (OOS) Results:")
         logger.info(f"    AUC: {auc:.4f}")
         logger.info(f"    Precision: {precision:.4f}")
         logger.info(f"    Recall: {recall:.4f}")
         logger.info(f"    F1: {f1:.4f}")
-        logger.info(f"    Positive rate: {y_test.mean():.2%}")
-        logger.info(f"    Predicted positive: {pred_binary.mean():.2%}")
+        logger.info(f"    Actual positive rate: {y_test.mean():.2%}")
+        logger.info(f"    Predicted positive rate: {pred_binary.mean():.2%}")
         
         results['lower'] = {
             'model': model_lower,
@@ -466,7 +396,7 @@ def train_v7_model(
     models_dir.mkdir(exist_ok=True)
     
     if results['upper']:
-        upper_path = models_dir / f'keltner_upper_v7_{timestamp}.pkl'
+        upper_path = models_dir / f'keltner_upper_{timeframe}_v7_{timestamp}.pkl'
         with open(upper_path, 'wb') as f:
             pickle.dump({
                 'model': results['upper']['model'],
@@ -479,13 +409,14 @@ def train_v7_model(
                         'ema_period': ema_period,
                         'atr_period': atr_period,
                         'multiplier': multiplier
-                    }
+                    },
+                    'train_samples': len(X_upper)
                 }
             }, f)
         logger.info(f"\n[SAVE] Upper model: {upper_path}")
     
     if results['lower']:
-        lower_path = models_dir / f'keltner_lower_v7_{timestamp}.pkl'
+        lower_path = models_dir / f'keltner_lower_{timeframe}_v7_{timestamp}.pkl'
         with open(lower_path, 'wb') as f:
             pickle.dump({
                 'model': results['lower']['model'],
@@ -498,7 +429,8 @@ def train_v7_model(
                         'ema_period': ema_period,
                         'atr_period': atr_period,
                         'multiplier': multiplier
-                    }
+                    },
+                    'train_samples': len(X_lower)
                 }
             }, f)
         logger.info(f"[SAVE] Lower model: {lower_path}")
@@ -521,6 +453,8 @@ if __name__ == '__main__':
     parser.add_argument('--atr', type=int, default=14)
     parser.add_argument('--multiplier', type=float, default=2.0)
     parser.add_argument('--horizon', type=int, default=4)
+    parser.add_argument('--train-ratio', type=float, default=0.7, help='Training set ratio')
+    parser.add_argument('--val-ratio', type=float, default=0.15, help='Validation set ratio')
     
     args = parser.parse_args()
     
@@ -531,7 +465,9 @@ if __name__ == '__main__':
         ema_period=args.ema,
         atr_period=args.atr,
         multiplier=args.multiplier,
-        horizon=args.horizon
+        horizon=args.horizon,
+        train_ratio=args.train_ratio,
+        val_ratio=args.val_ratio
     )
     
     print("\n訓練完成!")
