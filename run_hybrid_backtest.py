@@ -18,6 +18,7 @@ import os
 from pathlib import Path
 from datetime import datetime, timedelta
 import pandas as pd
+import glob
 
 # Fix Windows console encoding
 if sys.platform == 'win32':
@@ -34,6 +35,34 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+
+def find_latest_models() -> tuple:
+    """
+    自動尋找最新的 XGBoost v3 模型
+    
+    Returns:
+        (long_model_path, short_model_path) or (None, None)
+    """
+    models_dir = Path('models_output')
+    if not models_dir.exists():
+        return None, None
+    
+    # 尋找所有 v3 模型
+    long_models = list(models_dir.glob('*long_v3*.pkl'))
+    short_models = list(models_dir.glob('*short_v3*.pkl'))
+    
+    if not long_models or not short_models:
+        return None, None
+    
+    # 取最新的
+    long_model = max(long_models, key=lambda p: p.stat().st_mtime)
+    short_model = max(short_models, key=lambda p: p.stat().st_mtime)
+    
+    logger.info(f"[AUTO] Found Long model: {long_model.name}")
+    logger.info(f"[AUTO] Found Short model: {short_model.name}")
+    
+    return str(long_model), str(short_model)
 
 
 def parse_args():
@@ -58,13 +87,11 @@ def parse_args():
     parser.add_argument('--leverage', type=float, default=2.0,
                        help='槓桿倍數')
     
-    # 模型路徑
-    parser.add_argument('--xgb-long', type=str, 
-                       default='models_output/catboost_long_v3_BTCUSDT1m_20260225_083414.pkl',
-                       help='XGBoost Long 模型路徑')
-    parser.add_argument('--xgb-short', type=str,
-                       default='models_output/catboost_short_v3_BTCUSDT1m_20260225_083414.pkl',
-                       help='XGBoost Short 模型路徑')
+    # 模型路徑 (自動檢測)
+    parser.add_argument('--xgb-long', type=str, default='',
+                       help='XGBoost Long 模型路徑 (留空自動檢測)')
+    parser.add_argument('--xgb-short', type=str, default='',
+                       help='XGBoost Short 模型路徑 (留空自動檢測)')
     parser.add_argument('--chronos-model', type=str,
                        default='amazon/chronos-t5-small',
                        help='Chronos 模型')
@@ -140,16 +167,27 @@ def main():
     # Step 3: XGBoost 特徵工程
     logger.info(f"\nStep 3/5: Engineering features for XGBoost...")
     
-    # 檢查模型檔案
-    xgb_long_path = Path(args.xgb_long)
-    xgb_short_path = Path(args.xgb_short)
+    # 自動檢測模型
+    if not args.xgb_long or not args.xgb_short:
+        logger.info("[AUTO] Auto-detecting XGBoost v3 models...")
+        xgb_long_path, xgb_short_path = find_latest_models()
+        
+        if not xgb_long_path or not xgb_short_path:
+            logger.error(f"[ERROR] No XGBoost v3 models found in models_output/")
+            logger.error(f"\nPlease train XGBoost v3 models first:")
+            logger.error(f"  python train_v3.py --symbol {args.symbol} --timeframe {args.timeframe}")
+            sys.exit(1)
+    else:
+        xgb_long_path = args.xgb_long
+        xgb_short_path = args.xgb_short
+    
+    xgb_long_path = Path(xgb_long_path)
+    xgb_short_path = Path(xgb_short_path)
     
     if not xgb_long_path.exists() or not xgb_short_path.exists():
-        logger.error(f"[ERROR] XGBoost models not found!")
-        logger.error(f"Expected: {xgb_long_path}")
-        logger.error(f"Expected: {xgb_short_path}")
-        logger.error(f"\nPlease train XGBoost v3 models first:")
-        logger.error(f"  python train_v3.py")
+        logger.error(f"[ERROR] Model files not found!")
+        logger.error(f"Long: {xgb_long_path}")
+        logger.error(f"Short: {xgb_short_path}")
         sys.exit(1)
     
     from utils.feature_engineering_v3 import engineer_features_v3
