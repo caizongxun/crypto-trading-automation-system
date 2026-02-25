@@ -58,6 +58,22 @@ class FeatureEngineerV3:
         
         df = df_1m.copy()
         
+        # CRITICAL FIX: Ensure datetime index
+        if not isinstance(df.index, pd.DatetimeIndex):
+            if 'open_time' in df.columns:
+                print("[V3] Converting open_time to datetime index...")
+                df['open_time'] = pd.to_datetime(df['open_time'])
+                df = df.set_index('open_time')
+            elif 'timestamp' in df.columns:
+                print("[V3] Converting timestamp to datetime index...")
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
+                df = df.set_index('timestamp')
+            else:
+                print("[V3 WARNING] No time column found, creating synthetic datetime index")
+                df.index = pd.date_range(start='2020-01-01', periods=len(df), freq='1min')
+        
+        print(f"[V3] Index type: {type(df.index).__name__}")
+        
         # ========================================
         # 1. Core Price Features
         # ========================================
@@ -178,7 +194,7 @@ class FeatureEngineerV3:
         # ========================================
         print("[V3] Computing market regime...")
         
-        # Hourly aggregates
+        # Hourly aggregates - NOW SAFE because we have DatetimeIndex
         df['hour'] = df.index.hour
         df['is_asian'] = df['hour'].between(0, 8).astype(int)
         df['is_london'] = df['hour'].between(8, 16).astype(int)
