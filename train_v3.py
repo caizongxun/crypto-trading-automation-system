@@ -1,84 +1,89 @@
-#!/usr/bin/env python3
 """
-V3 模型訓練程式
+V3 Model Training Script - Optimized for High Win Rate Trading
 
-改進:
-1. 更好的特徵工程 (20-25個精簡特徵)
-2. 更好的標籤定義 (基於實際 TP/SL)
-3. 雙階段訓練 (分類 + 機率校準)
-4. 更好的機率分佈
+Key Features:
+- Aggressive label definitions (1.2% TP, 0.8% SL)
+- 30+ optimized features
+- Better probability calibration
+- Independent Long/Short models
+- Comprehensive validation
+
+Author: Zong
+Version: 3.0.0
+Date: 2026-02-25
 """
 
 import pandas as pd
 import numpy as np
-from pathlib import Path
 import pickle
+from pathlib import Path
 import json
 from datetime import datetime
-import sys
-
-sys.path.append(str(Path(__file__).parent))
-
-from utils.feature_engineering_v3 import FeatureEngineerV3
-from utils.logger import setup_logger
-from huggingface_hub import hf_hub_download
-from config import Config
-
-# ML
-from catboost import CatBoostClassifier
-from sklearn.model_selection import TimeSeriesSplit
-from sklearn.calibration import CalibratedClassifierCV
-from sklearn.metrics import (
-    classification_report, 
-    roc_auc_score, 
-    precision_recall_curve,
-    confusion_matrix
-)
 import warnings
 warnings.filterwarnings('ignore')
+
+# ML Libraries
+from catboost import CatBoostClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.metrics import (
+    classification_report, roc_auc_score, 
+    precision_recall_curve, confusion_matrix
+)
+
+# Project imports
+from config import Config
+from utils.logger import setup_logger
+from utils.feature_engineering_v3 import FeatureEngineerV3
+from huggingface_hub import hf_hub_download
 
 logger = setup_logger('train_v3', 'logs/train_v3.log')
 
 class V3ModelTrainer:
-    def __init__(self, 
-                 tp_pct: float = 0.02,
-                 sl_pct: float = 0.01,
-                 quick_test: bool = False):
-        self.tp_pct = tp_pct
-        self.sl_pct = sl_pct
-        self.quick_test = quick_test
-        self.feature_engineer = FeatureEngineerV3()
-        
-        logger.info("="*80)
-        logger.info("V3 MODEL TRAINER INITIALIZED")
-        logger.info("="*80)
-        logger.info(f"TP/SL: {tp_pct*100:.1f}% / {sl_pct*100:.1f}%")
-        logger.info(f"Quick test mode: {quick_test}")
+    """
+    V3 Model Trainer with Optimized Pipeline
+    """
     
-    def load_data(self) -> pd.DataFrame:
-        """載入數據"""
-        logger.info("\nLoading data from HuggingFace...")
+    def __init__(self):
+        self.version = "3.0.0"
+        self.fe = FeatureEngineerV3()
+        self.timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        
+        # Output directories
+        self.models_dir = Path("models_output")
+        self.models_dir.mkdir(exist_ok=True)
+        
+        self.reports_dir = Path("training_reports")
+        self.reports_dir.mkdir(exist_ok=True)
+        
+        logger.info(f"="*80)
+        logger.info(f"V3 MODEL TRAINER INITIALIZED")
+        logger.info(f"Version: {self.version}")
+        logger.info(f"Timestamp: {self.timestamp}")
+        logger.info(f"="*80)
+    
+    def load_data(self, symbol: str = "BTCUSDT") -> pd.DataFrame:
+        """
+        Load 1m kline data from HuggingFace
+        """
+        logger.info(f"Loading {symbol} 1m data from HuggingFace...")
+        
+        repo_id = Config.HF_REPO_ID
+        base = symbol.replace("USDT", "")
+        filename = f"{base}_1m.parquet"
+        path_in_repo = f"klines/{symbol}/{filename}"
         
         try:
             local_path = hf_hub_download(
-                repo_id=Config.HF_REPO_ID,
-                filename="klines/BTCUSDT/BTC_1m.parquet",
+                repo_id=repo_id,
+                filename=path_in_repo,
                 repo_type="dataset",
                 token=Config.HF_TOKEN
             )
+            
             df = pd.read_parquet(local_path)
-            
-            if 'open_time' in df.columns:
-                df['open_time'] = pd.to_datetime(df['open_time'])
-                df.set_index('open_time', inplace=True)
-            
             logger.info(f"Loaded {len(df):,} rows")
-            logger.info(f"Date range: {df.index.min()} to {df.index.max()}")
-            
-            # Quick test: 只用最近 30 天
-            if self.quick_test:
-                df = df.tail(30 * 1440)
-                logger.info(f"Quick test mode: using last {len(df):,} rows")
+            logger.info(f"Date range: {df.index[0]} to {df.index[-1]}")
             
             return df
             
@@ -86,152 +91,118 @@ class V3ModelTrainer:
             logger.error(f"Failed to load data: {str(e)}")
             raise
     
-    def prepare_features(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        """生成特徵"""
-        logger.info("\nGenerating V3 features...")
-        
-        df_features = self.feature_engineer.create_features_from_1m(
-            df,
-            tp_pct=self.tp_pct,
-            sl_pct=self.sl_pct,
-            label_type='both'
-        )
-        
-        # 分離特徵和標籤
-        feature_cols = self.feature_engineer.get_feature_list()
-        
-        X = df_features[feature_cols].copy()
-        y_long = df_features['label_long'].copy()
-        y_short = df_features['label_short'].copy()
-        
-        logger.info(f"Features shape: {X.shape}")
-        logger.info(f"Long labels: {y_long.sum()}/{len(y_long)} ({y_long.mean()*100:.2f}% positive)")
-        logger.info(f"Short labels: {y_short.sum()}/{len(y_short)} ({y_short.mean()*100:.2f}% positive)")
-        
-        return X, y_long, y_short
-    
-    def train_model(self, X: pd.DataFrame, y: pd.Series, direction: str) -> dict:
+    def train_model(self, 
+                   df: pd.DataFrame, 
+                   direction: str,
+                   test_size: float = 0.2) -> dict:
         """
-        訓練單個模型
+        Train a single model (long or short)
         
-        雙階段訓練:
-        1. CatBoost 基礎模型
-        2. Isotonic 機率校準
+        Args:
+            df: DataFrame with features and labels
+            direction: 'long' or 'short'
+            test_size: Test set ratio
+        
+        Returns:
+            dict with model, metrics, and metadata
         """
-        logger.info("="*80)
+        logger.info(f"\n{'='*80}")
         logger.info(f"TRAINING {direction.upper()} MODEL")
-        logger.info("="*80)
+        logger.info(f"{'='*80}")
         
-        # Train/Val 切分 (80/20)
-        split_idx = int(len(X) * 0.8)
-        X_train, X_val = X.iloc[:split_idx], X.iloc[split_idx:]
-        y_train, y_val = y.iloc[:split_idx], y.iloc[split_idx:]
+        # Get features and labels
+        feature_cols = self.fe.get_feature_list()
+        label_col = f'label_{direction}'
         
-        logger.info(f"Train: {len(X_train):,} | Val: {len(X_val):,}")
+        logger.info(f"Features: {len(feature_cols)}")
+        logger.info(f"Label: {label_col}")
         
-        # 階段 1: CatBoost
-        logger.info("\nStage 1: Training CatBoost classifier...")
+        # Prepare data
+        X = df[feature_cols].copy()
+        y = df[label_col].copy()
         
-        if self.quick_test:
-            iterations = 200
-        else:
-            iterations = 1000
+        # Class distribution
+        pos_rate = (y == 1).sum() / len(y) * 100
+        logger.info(f"Positive samples: {(y==1).sum():,} ({pos_rate:.2f}%)")
+        logger.info(f"Negative samples: {(y==0).sum():,} ({100-pos_rate:.2f}%)")
+        
+        # Train/test split (time-based)
+        split_idx = int(len(X) * (1 - test_size))
+        X_train = X.iloc[:split_idx]
+        X_test = X.iloc[split_idx:]
+        y_train = y.iloc[:split_idx]
+        y_test = y.iloc[split_idx:]
+        
+        logger.info(f"\nTrain set: {len(X_train):,} samples")
+        logger.info(f"Test set:  {len(X_test):,} samples")
+        
+        # Calculate class weight
+        pos_weight = (y_train == 0).sum() / (y_train == 1).sum()
+        logger.info(f"Class weight: {pos_weight:.2f}")
+        
+        # ========================================
+        # Train CatBoost
+        # ========================================
+        logger.info("\nTraining CatBoost model...")
         
         model = CatBoostClassifier(
-            iterations=iterations,
+            iterations=500,
             learning_rate=0.05,
             depth=6,
             l2_leaf_reg=3,
-            loss_function='Logloss',
-            eval_metric='AUC',
             random_seed=42,
-            verbose=100,
-            early_stopping_rounds=50
+            verbose=False,
+            class_weights={0: 1.0, 1: pos_weight},
+            eval_metric='AUC'
         )
         
         model.fit(
             X_train, y_train,
-            eval_set=(X_val, y_val),
-            use_best_model=True
+            eval_set=(X_test, y_test),
+            early_stopping_rounds=50,
+            verbose=100
         )
         
-        # 評估基礎模型
-        y_pred_proba_train = model.predict_proba(X_train)[:, 1]
-        y_pred_proba_val = model.predict_proba(X_val)[:, 1]
-        
-        train_auc = roc_auc_score(y_train, y_pred_proba_train)
-        val_auc = roc_auc_score(y_val, y_pred_proba_val)
-        
-        logger.info(f"\nBase model performance:")
-        logger.info(f"  Train AUC: {train_auc:.4f}")
-        logger.info(f"  Val AUC: {val_auc:.4f}")
-        
-        # 階段 2: 機率校準
-        logger.info("\nStage 2: Calibrating probabilities...")
+        # ========================================
+        # Calibrate Probabilities
+        # ========================================
+        logger.info("\nCalibrating probabilities...")
         
         calibrated_model = CalibratedClassifierCV(
-            model,
+            model, 
             method='isotonic',
             cv='prefit'
         )
+        calibrated_model.fit(X_test, y_test)
         
-        calibrated_model.fit(X_val, y_val)
+        # ========================================
+        # Evaluate
+        # ========================================
+        logger.info("\nEvaluating model...")
         
-        # 評估校準後模型
-        y_pred_proba_cal = calibrated_model.predict_proba(X_val)[:, 1]
+        # Predictions
+        y_pred_proba = calibrated_model.predict_proba(X_test)[:, 1]
+        y_pred = (y_pred_proba >= 0.5).astype(int)
         
-        # 分析機率分佈
-        self._analyze_probability_distribution(y_pred_proba_cal, y_val, direction)
+        # Metrics
+        auc = roc_auc_score(y_test, y_pred_proba)
+        logger.info(f"AUC: {auc:.4f}")
         
-        # 特徵重要性
-        feature_importance = pd.DataFrame({
-            'feature': X.columns,
-            'importance': model.feature_importances_
-        }).sort_values('importance', ascending=False)
+        # Classification report
+        report = classification_report(y_test, y_pred, output_dict=True)
+        logger.info(f"\nClassification Report:")
+        logger.info(f"Precision: {report['1']['precision']:.4f}")
+        logger.info(f"Recall:    {report['1']['recall']:.4f}")
+        logger.info(f"F1-Score:  {report['1']['f1-score']:.4f}")
         
-        logger.info("\nTop 10 features:")
-        for idx, row in feature_importance.head(10).iterrows():
-            logger.info(f"  {row['feature']}: {row['importance']:.4f}")
+        # Confusion matrix
+        cm = confusion_matrix(y_test, y_pred)
+        logger.info(f"\nConfusion Matrix:")
+        logger.info(f"TN: {cm[0,0]:,} | FP: {cm[0,1]:,}")
+        logger.info(f"FN: {cm[1,0]:,} | TP: {cm[1,1]:,}")
         
-        # 儲存模型和 metadata
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        model_data = {
-            'model': calibrated_model,
-            'feature_names': list(X.columns),
-            'version': 'v3',
-            'direction': direction,
-            'timestamp': timestamp,
-            'tp_pct': self.tp_pct,
-            'sl_pct': self.sl_pct,
-            'train_auc': train_auc,
-            'val_auc': val_auc,
-            'feature_importance': feature_importance.to_dict('records')
-        }
-        
-        # 儲存
-        models_dir = Path('models_output')
-        models_dir.mkdir(exist_ok=True)
-        
-        model_path = models_dir / f"catboost_{direction}_v3_{timestamp}.pkl"
-        with open(model_path, 'wb') as f:
-            pickle.dump(model_data, f)
-        
-        logger.info(f"\nModel saved: {model_path}")
-        
-        return {
-            'model_path': model_path,
-            'train_auc': train_auc,
-            'val_auc': val_auc,
-            'feature_importance': feature_importance
-        }
-    
-    def _analyze_probability_distribution(self, y_pred_proba: np.ndarray, y_true: pd.Series, direction: str):
-        """分析機率分佈"""
-        logger.info("\n" + "="*80)
-        logger.info(f"PROBABILITY DISTRIBUTION ANALYSIS - {direction.upper()}")
-        logger.info("="*80)
-        
-        # 基本統計
+        # Probability distribution
+        logger.info(f"\nProbability Distribution:")
         logger.info(f"Min:  {y_pred_proba.min():.4f}")
         logger.info(f"25%:  {np.percentile(y_pred_proba, 25):.4f}")
         logger.info(f"50%:  {np.percentile(y_pred_proba, 50):.4f}")
@@ -239,118 +210,132 @@ class V3ModelTrainer:
         logger.info(f"95%:  {np.percentile(y_pred_proba, 95):.4f}")
         logger.info(f"Max:  {y_pred_proba.max():.4f}")
         
-        # 不同閾值的表現
-        logger.info("\nPerformance at different thresholds:")
-        
+        # Precision at different thresholds
+        logger.info(f"\nPrecision @ Thresholds:")
         for threshold in [0.10, 0.15, 0.20, 0.25, 0.30]:
-            above_threshold = y_pred_proba >= threshold
-            if above_threshold.sum() > 0:
-                precision = y_true[above_threshold].mean()
-                count = above_threshold.sum()
-                pct = count / len(y_pred_proba) * 100
-                logger.info(f"  >= {threshold:.2f}: Precision={precision*100:.1f}%, Count={count:,} ({pct:.2f}%)")
+            mask = y_pred_proba >= threshold
+            if mask.sum() > 0:
+                precision = (y_test[mask] == 1).sum() / mask.sum()
+                coverage = mask.sum() / len(y_test) * 100
+                logger.info(f"  @ {threshold:.2f}: Precision={precision:.2%}, Coverage={coverage:.2f}%")
         
-        # 推薦閾值
-        logger.info("\nRecommended thresholds:")
-        
-        # 找到 precision > 55% 的最低閾值
-        for threshold in np.arange(0.05, 0.50, 0.01):
-            above = y_pred_proba >= threshold
-            if above.sum() > 50:  # 至少 50 個樣本
-                precision = y_true[above].mean()
-                if precision >= 0.55:
-                    logger.info(f"  For 55%+ win rate: >= {threshold:.2f}")
-                    break
-        
-        # 找到 precision > 60% 的最低閾值
-        for threshold in np.arange(0.05, 0.50, 0.01):
-            above = y_pred_proba >= threshold
-            if above.sum() > 30:
-                precision = y_true[above].mean()
-                if precision >= 0.60:
-                    logger.info(f"  For 60%+ win rate: >= {threshold:.2f}")
-                    break
-        
-        logger.info("="*80)
-    
-    def run(self):
-        """執行完整訓練流程"""
-        logger.info("\n" + "="*80)
-        logger.info("STARTING V3 TRAINING PIPELINE")
-        logger.info("="*80)
-        
-        try:
-            # 1. 載入數據
-            df = self.load_data()
-            
-            # 2. 生成特徵
-            X, y_long, y_short = self.prepare_features(df)
-            
-            # 3. 訓練 Long 模型
-            long_results = self.train_model(X, y_long, 'long')
-            
-            # 4. 訓練 Short 模型
-            short_results = self.train_model(X, y_short, 'short')
-            
-            # 5. 報告
-            logger.info("\n" + "="*80)
-            logger.info("TRAINING COMPLETED")
-            logger.info("="*80)
-            logger.info(f"Long model:  {long_results['model_path']}")
-            logger.info(f"  Train AUC: {long_results['train_auc']:.4f}")
-            logger.info(f"  Val AUC:   {long_results['val_auc']:.4f}")
-            logger.info(f"\nShort model: {short_results['model_path']}")
-            logger.info(f"  Train AUC: {short_results['train_auc']:.4f}")
-            logger.info(f"  Val AUC:   {short_results['val_auc']:.4f}")
-            logger.info("="*80)
-            
-            # 儲存訓練報告
-            report = {
-                'version': 'v3',
-                'timestamp': datetime.now().isoformat(),
-                'tp_pct': self.tp_pct,
-                'sl_pct': self.sl_pct,
-                'quick_test': self.quick_test,
-                'long_model': {
-                    'path': str(long_results['model_path']),
-                    'train_auc': long_results['train_auc'],
-                    'val_auc': long_results['val_auc']
-                },
-                'short_model': {
-                    'path': str(short_results['model_path']),
-                    'train_auc': short_results['train_auc'],
-                    'val_auc': short_results['val_auc']
-                }
+        # ========================================
+        # Package Results
+        # ========================================
+        results = {
+            'model': calibrated_model,
+            'feature_names': feature_cols,
+            'version': 'v3',
+            'direction': direction,
+            'timestamp': self.timestamp,
+            'metrics': {
+                'auc': float(auc),
+                'precision': float(report['1']['precision']),
+                'recall': float(report['1']['recall']),
+                'f1': float(report['1']['f1-score'])
+            },
+            'probability_stats': {
+                'min': float(y_pred_proba.min()),
+                'p25': float(np.percentile(y_pred_proba, 25)),
+                'p50': float(np.percentile(y_pred_proba, 50)),
+                'p75': float(np.percentile(y_pred_proba, 75)),
+                'p95': float(np.percentile(y_pred_proba, 95)),
+                'max': float(y_pred_proba.max())
+            },
+            'class_distribution': {
+                'train_positive_rate': float((y_train == 1).sum() / len(y_train)),
+                'test_positive_rate': float((y_test == 1).sum() / len(y_test))
             }
-            
-            report_path = Path('training_reports') / f"v3_training_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-            report_path.parent.mkdir(exist_ok=True)
-            
-            with open(report_path, 'w') as f:
-                json.dump(report, f, indent=2)
-            
-            logger.info(f"\nTraining report saved: {report_path}")
-            
-            return report
-            
-        except Exception as e:
-            logger.error(f"Training failed: {str(e)}")
-            raise
+        }
+        
+        return results
+    
+    def save_model(self, results: dict, direction: str):
+        """
+        Save model with metadata
+        """
+        model_name = f"catboost_{direction}_v3_{self.timestamp}.pkl"
+        model_path = self.models_dir / model_name
+        
+        # Save model package
+        with open(model_path, 'wb') as f:
+            pickle.dump(results, f)
+        
+        logger.info(f"\nModel saved: {model_path}")
+        logger.info(f"Size: {model_path.stat().st_size / 1024 / 1024:.2f} MB")
+        
+        return model_path
+    
+    def save_report(self, long_results: dict, short_results: dict):
+        """
+        Save training report
+        """
+        report = {
+            'version': 'v3',
+            'timestamp': self.timestamp,
+            'long_model': {
+                'metrics': long_results['metrics'],
+                'probability_stats': long_results['probability_stats'],
+                'class_distribution': long_results['class_distribution']
+            },
+            'short_model': {
+                'metrics': short_results['metrics'],
+                'probability_stats': short_results['probability_stats'],
+                'class_distribution': short_results['class_distribution']
+            },
+            'features': long_results['feature_names'],
+            'feature_count': len(long_results['feature_names'])
+        }
+        
+        report_path = self.reports_dir / f"v3_training_report_{self.timestamp}.json"
+        with open(report_path, 'w') as f:
+            json.dump(report, f, indent=2)
+        
+        logger.info(f"\nReport saved: {report_path}")
+        return report_path
+    
+    def run_full_training(self):
+        """
+        Run complete V3 training pipeline
+        """
+        logger.info("\n" + "="*80)
+        logger.info("STARTING V3 FULL TRAINING PIPELINE")
+        logger.info("="*80)
+        
+        # 1. Load data
+        df_1m = self.load_data()
+        
+        # 2. Create features
+        logger.info("\nCreating V3 features...")
+        df_features = self.fe.create_features_from_1m(
+            df_1m,
+            label_type='both',
+            tp_target=0.012,  # 1.2%
+            sl_stop=0.008,    # 0.8%
+            lookahead_bars=240  # 4 hours
+        )
+        
+        # 3. Train Long model
+        long_results = self.train_model(df_features, 'long')
+        long_path = self.save_model(long_results, 'long')
+        
+        # 4. Train Short model
+        short_results = self.train_model(df_features, 'short')
+        short_path = self.save_model(short_results, 'short')
+        
+        # 5. Save report
+        report_path = self.save_report(long_results, short_results)
+        
+        # Summary
+        logger.info("\n" + "="*80)
+        logger.info("TRAINING COMPLETED SUCCESSFULLY")
+        logger.info("="*80)
+        logger.info(f"Long Model:  {long_path}")
+        logger.info(f"Short Model: {short_path}")
+        logger.info(f"Report:      {report_path}")
+        logger.info("\nV3 Models ready for backtesting!")
+        logger.info("="*80)
 
-if __name__ == '__main__':
-    import argparse
-    
-    parser = argparse.ArgumentParser(description='Train V3 models')
-    parser.add_argument('--tp', type=float, default=0.02, help='Take profit %')
-    parser.add_argument('--sl', type=float, default=0.01, help='Stop loss %')
-    parser.add_argument('--quick', action='store_true', help='Quick test mode')
-    
-    args = parser.parse_args()
-    
-    trainer = V3ModelTrainer(
-        tp_pct=args.tp,
-        sl_pct=args.sl,
-        quick_test=args.quick
-    )
-    
-    trainer.run()
+if __name__ == "__main__":
+    trainer = V3ModelTrainer()
+    trainer.run_full_training()
