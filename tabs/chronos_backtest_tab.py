@@ -115,7 +115,15 @@ def render():
     st.markdown("---")
     
     if st.button("🚀 執行回測", type="primary", use_container_width=True):
-        with st.spinner(f"正在載入 Chronos {chronos_params['model_size']} 模型..."):
+        
+        # 建立進度區域
+        progress_container = st.empty()
+        status_container = st.empty()
+        
+        def update_progress(msg):
+            status_container.info(msg)
+        
+        with st.spinner("正在執行回測..."):
             result = run_chronos_backtest(
                 symbol=symbol,
                 timeframe=timeframe,
@@ -124,11 +132,16 @@ def render():
                 chronos_params=chronos_params,
                 tp_pct=tp_pct,
                 sl_pct=sl_pct,
-                prob_threshold=prob_threshold
+                prob_threshold=prob_threshold,
+                progress_callback=update_progress
             )
             
             # 儲存結果到 session state
             st.session_state['chronos_result'] = result
+        
+        # 清除進度顯示
+        progress_container.empty()
+        status_container.empty()
     
     # 顯示結果
     if 'chronos_result' in st.session_state:
@@ -139,10 +152,11 @@ def render():
     st.markdown("---")
     st.info("""
     **使用建議:**
-    - 首次使用建議選 `tiny` 模型快速測試
-    - 生產環境建議使用 `small` 模型
-    - `lookback` 設 168 (7天) 通常效果最好
-    - 機率門檻 0.15-0.20 較合適
+    - 👍 首次使用建議選 `tiny` 模型快速測試
+    - 🚀 生產環境建議使用 `small` 模型
+    - ⏰ `lookback` 設 168 (7天) 通常效果最好
+    - 🎯 機率門檻 0.15-0.20 較合適
+    - ⚠️ 首次使用會下載模型 (~33MB)，需等待1-2分鐘
     """)
 
 
