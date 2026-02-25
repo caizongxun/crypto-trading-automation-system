@@ -72,10 +72,10 @@ class ChronosPredictor:
             dtype=torch.float32
         )
         
-        # 預測
+        # 預測 (直接傳入 context,不用關鍵字參數)
         try:
             forecast = self.pipeline.predict(
-                context=context.unsqueeze(0),
+                context.unsqueeze(0),  # 移除 context= 關鍵字
                 prediction_length=horizon,
                 num_samples=num_samples
             )
