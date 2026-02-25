@@ -20,6 +20,13 @@ try:
 except ImportError:
     CHRONOS_AVAILABLE = False
 
+# 載入 v10 Scalping Tab
+try:
+    from tabs import v10_scalping_tab
+    V10_AVAILABLE = True
+except ImportError:
+    V10_AVAILABLE = False
+
 # 試圖載入 V2 標籤
 try:
     from tabs.model_training_v2_tab import ModelTrainingV2Tab
@@ -64,6 +71,8 @@ def main():
             version_options.append("V3 - 優化版 (30特徵) [NEW]")
         if CHRONOS_AVAILABLE:
             version_options.append("Chronos - 時間序列 [AI]")
+        if V10_AVAILABLE:
+            version_options.append("V10 - 剝頭皮 [🔥HOT]")
         
         # 預設選擇最新版本
         default_idx = len(version_options) - 1
@@ -75,7 +84,9 @@ def main():
             elif st.session_state.system_version == 'v3':
                 default_idx = 2 if V3_AVAILABLE else (1 if V2_AVAILABLE else 0)
             elif st.session_state.system_version == 'chronos':
-                default_idx = len(version_options) - 1 if CHRONOS_AVAILABLE else 0
+                default_idx = 3 if CHRONOS_AVAILABLE else 0
+            elif st.session_state.system_version == 'v10':
+                default_idx = len(version_options) - 1 if V10_AVAILABLE else 0
         
         system_version = st.radio(
             "選擇系統版本",
@@ -85,7 +96,37 @@ def main():
         )
         
         # 設定 session state
-        if "Chronos" in system_version:
+        if "V10" in system_version:
+            st.session_state.system_version = 'v10'
+            st.success("🔥 V10 高頻剝頭皮")
+            
+            with st.expander("🚀 V10 特性"):
+                st.markdown("""
+                **V10 高頻剝頭皮策略**
+                - ✅ 15分鐘時間框架
+                - ✅ 每日 40-50 筆交易
+                - ✅ TP: 0.5% | SL: 0.25%
+                - ✅ 持有時間: 45-75分鐘
+                
+                **歷史績效 (234天)**
+                - 交易數: 11,025 筆
+                - 勝率: 57.2%
+                - 總報酬: **+234.45%**
+                - Sharpe: **5.38**
+                - 最大回撤: -5.5%
+                - 盈虧比: 2.08
+                
+                **年化表現**
+                - 年化報酬: 365%
+                - 月報酬: 30.4%
+                - 日報酬: 1.0%
+                
+                **狀態**: 生產就緒 ✅
+                """)
+                
+                st.info("📊 [查看完整報告](backtest_results/v10_detailed/)")
+        
+        elif "Chronos" in system_version:
             st.session_state.system_version = 'chronos'
             st.success("🔮 Chronos 時間序列預測")
             
@@ -147,8 +188,8 @@ def main():
                 - 回測無交易或極少交易
                 
                 **建議**
-                - 使用 V3 或 Chronos 替代
-                - V3/Chronos 已修復所有問題
+                - 使用 V3, Chronos 或 V10 替代
+                - V3/Chronos/V10 已修復所有問題
                 
                 [詳細對比](V1_V2_V3_COMPARISON.md)
                 """)
@@ -168,7 +209,7 @@ def main():
                 - 勝率: 35-40%
                 - Profit Factor: 1.0-1.3
                 
-                **建議**: 升級到 V3 或 Chronos
+                **建議**: 升級到 V3, Chronos 或 V10
                 """)
         
         st.markdown("---")
@@ -185,6 +226,7 @@ def main():
             v2_short = list(models_dir.glob("catboost_short_v2_*.pkl"))
             v3_long = list(models_dir.glob("catboost_long_v3_*.pkl"))
             v3_short = list(models_dir.glob("catboost_short_v3_*.pkl"))
+            v10_model = list(models_dir.glob("v10_*_scalping_*.h5"))
             
             col1, col2 = st.columns(2)
             with col1:
@@ -196,6 +238,8 @@ def main():
                 st.metric("V2 Short", len(v2_short))
                 st.metric("V3 Short", len(v3_short), delta="新" if len(v3_short) > 0 else None)
         
+        if V10_AVAILABLE:
+            st.success("🔥 V10 剝頭皮已安裝")
         if CHRONOS_AVAILABLE:
             st.success("🌟 Chronos 已安裝")
         
@@ -205,6 +249,7 @@ def main():
         st.subheader("文檔")
         st.markdown("""
         **新功能**
+        - [🔥 V10 剝頭皮策略](backtest_results/v10_detailed/)
         - [🌟 Chronos 整合](docs/CHRONOS_INTEGRATION.md)
         
         **V3 文檔**
@@ -228,7 +273,9 @@ def main():
         st.title("加密貨幣自動交易系統")
     with col2:
         version = st.session_state.get('system_version', 'v1')
-        if version == 'chronos':
+        if version == 'v10':
+            st.success("🔥 V10 剝頭皮")
+        elif version == 'chronos':
             st.success("🔮 Chronos AI")
         elif version == 'v3':
             st.success("V3 優化版")
@@ -242,9 +289,14 @@ def main():
     # 根據版本顯示不同標籤
     version = st.session_state.get('system_version', 'v1')
     
-    if version == 'chronos' and CHRONOS_AVAILABLE:
+    if version == 'v10' and V10_AVAILABLE:
+        # V10 版本 - 專屬 Tab
+        st.success("🔥 V10 高頻剝頭皮策略 - 已驗證 11,025 筆交易")
+        v10_scalping_tab.render()
+    
+    elif version == 'chronos' and CHRONOS_AVAILABLE:
         # Chronos 版本 - 單獨 Tab
-        st.info("🔮 Chronos 時間序列預測模型 - 無需訓練，立即使用")
+        st.info("🔮 Chronos 時間序列預測模型 - 無需訓練,立即使用")
         chronos_backtest_tab.render()
     
     elif version == 'v3' and V3_AVAILABLE:

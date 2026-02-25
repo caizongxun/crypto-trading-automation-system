@@ -1,17 +1,27 @@
-from .data_fetcher_tab import DataFetcherTab
-from .feature_engineering_tab import FeatureEngineeringTab
-from .model_training_tab import ModelTrainingTab
-from .model_training_v2_tab import ModelTrainingV2Tab
-from .backtesting_tab import BacktestingTab
-from .auto_trading_tab import AutoTradingTab
-from .model_management_tab import ModelManagementTab
+"""
+Tabs package
+"""
+
+from . import data_fetcher_tab
+from . import feature_engineering_tab
+from . import model_training_tab
+from . import backtesting_tab
+from . import auto_trading_tab
+from . import model_management_tab
+from . import model_training_v2_tab
+from . import model_training_v3_tab
+from . import chronos_backtest_tab
+from . import v10_scalping_tab
 
 __all__ = [
-    'DataFetcherTab',
-    'FeatureEngineeringTab',
-    'ModelTrainingTab',
-    'ModelTrainingV2Tab',
-    'BacktestingTab',
-    'AutoTradingTab',
-    'ModelManagementTab'
+    'data_fetcher_tab',
+    'feature_engineering_tab',
+    'model_training_tab',
+    'backtesting_tab',
+    'auto_trading_tab',
+    'model_management_tab',
+    'model_training_v2_tab',
+    'model_training_v3_tab',
+    'chronos_backtest_tab',
+    'v10_scalping_tab',
 ]
