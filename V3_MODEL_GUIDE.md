@@ -1,542 +1,459 @@
-# 🚀 V3 模型完整指南
+# 🚀 V3 Model Complete Guide
 
-## 📋 目錄
+## 🎯 Overview
 
-1. [V3 改進概述](#v3-改進概述)
-2. [快速開始](#快速開始)
-3. [特徵設計](#特徵設計)
-4. [標籤定義](#標籤定義)
-5. [訓練流程](#訓練流程)
-6. [使用模型](#使用模型)
-7. [與 V1/V2 對比](#與-v1v2-對比)
+V3 is a complete redesign of the trading model with focus on:
 
----
-
-## 🎯 V3 改進概述
-
-### 核心問題
-
-**V1/V2 的問題**:
-```
-V1:
-- 機率最高只到 0.45
-- 很難找到高確信度信號
-
-V2:
-- 機率最高只到 0.21
-- 幾乎沒有 > 0.20 的信號
-- 導致回測沒有交易
-```
-
-### V3 解決方案
-
-```
-1. 精簡特徵 (44 → 23)
-   ├─ 移除噪音特徵
-   ├─ 保留最有預測力的特徵
-   └─ 降低過擬合風險
-
-2. 更好的標籤定義
-   ├─ 基於實際 TP/SL
-   ├─ 考慮時間優先性
-   └─ 更符合真實交易
-
-3. 雙階段訓練
-   ├─ Stage 1: CatBoost 分類
-   └─ Stage 2: Isotonic 校準
-
-4. 更好的機率分佈
-   ├─ 預期最高機率: 0.6-0.8
-   ├─ > 0.20 信號: 5-10%
-   └─ 自動推薦閾值
-```
+1. **Higher Hit Rate** - More aggressive labels (1.2% TP vs 2%)
+2. **Better Probability Calibration** - Ensure usable probability outputs
+3. **Practical Features** - 30 optimized features vs 54
+4. **Independent Training** - Separate Long/Short with different characteristics
 
 ---
 
-## 🚀 快速開始
+## 📊 Key Improvements from V2
 
-### 1. 訓練 V3 模型
+### Label Definition
 
-#### 完整訓練 (推薦)
+```
+V2 Labels:
+- TP: 2.0% (太遠)
+- SL: 1.0%
+- Lookahead: 480 bars (8h)
+- 結果: 標籤太少,機率偏低
+
+V3 Labels:
+- TP: 1.2% (更實際)
+- SL: 0.8% (更緊)
+- Lookahead: 240 bars (4h)
+- 額外: 部分盈利條件 (2h 上漲 0.8%)
+- 結果: 更多標籤,機率分佈合理
+```
+
+### Feature Count
+
+```
+V2: 54 個特徵 (太多,有噪音)
+V3: 30 個特徵 (精選,高質量)
+```
+
+### Expected Results
+
+```
+V2 機率分佈:
+Max: 0.21 (Long), 0.42 (Short)
+> 0.15: 只有 0.2-0.4%
+
+V3 預期機率分佈:
+Max: 0.6-0.8
+> 0.15: 5-10%
+> 0.20: 2-5%
+```
+
+---
+
+## 🛠️ V3 Feature List
+
+### 1. Price Momentum (6 features)
+
+```python
+'returns_5m'         # 5分鐘報酬
+'returns_15m'        # 15分鐘報酬
+'returns_30m'        # 30分鐘報酬
+'returns_1h'         # 1小時報酬
+'price_position_1h'  # 1h 價格位置 (0-1)
+'price_position_4h'  # 4h 價格位置 (0-1)
+```
+
+### 2. Volatility (4 features)
+
+```python
+'atr_pct_14'        # 14分鐘 ATR %
+'atr_pct_60'        # 60分鐘 ATR %
+'vol_ratio'         # 波動率比例
+'vol_expanding'     # 波動擴張標誌 (0/1)
+```
+
+### 3. Trend (5 features)
+
+```python
+'trend_9_21'        # EMA9 vs EMA21 趨勢
+'trend_21_50'       # EMA21 vs EMA50 趨勢
+'above_ema9'        # 價格 > EMA9 (0/1)
+'above_ema21'       # 價格 > EMA21 (0/1)
+'above_ema50'       # 價格 > EMA50 (0/1)
+```
+
+### 4. Volume (3 features)
+
+```python
+'volume_ratio'      # 當前量 vs MA20
+'volume_trend'      # MA10 vs MA30
+'high_volume'       # 高量標誌 (0/1)
+```
+
+### 5. Microstructure (3 features)
+
+```python
+'body_pct'          # K線實體占比
+'bullish_candle'    # 看漲 K線 (0/1)
+'bearish_candle'    # 看跌 K線 (0/1)
+```
+
+### 6. Directional Pressure (2 features)
+
+```python
+'pressure_ratio_30m'  # 30分鐘看漲/看跌比例
+'green_streak'        # 連續看漨根數
+```
+
+### 7. Oscillators (3 features)
+
+```python
+'rsi_14'            # 14分鐘 RSI
+'rsi_oversold'      # RSI 超賣 (0/1)
+'rsi_overbought'    # RSI 超買 (0/1)
+```
+
+### 8. Market Regime (3 features)
+
+```python
+'is_asian'          # 亞洲時段 (0/1)
+'is_london'         # 倫敦時段 (0/1)
+'is_nyc'            # 紐約時段 (0/1)
+```
+
+**Total: 30 features** (每個都經過精心選擇)
+
+---
+
+## 💻 How to Train V3
+
+### Quick Start
 
 ```bash
-# 使用所有數據訓練
+# 1. Pull 最新代碼
+git pull origin main
+
+# 2. 執行 V3 訓練
 python train_v3.py
 
-# 預期時間: 30-60 分鐘
-# 使用數據: 所有 BTCUSDT 1m 數據
+# 3. 等待完成 (30-60分鐘)
+# 會生成:
+# - models_output/catboost_long_v3_YYYYMMDD_HHMMSS.pkl
+# - models_output/catboost_short_v3_YYYYMMDD_HHMMSS.pkl
+# - training_reports/v3_training_report_YYYYMMDD_HHMMSS.json
 ```
 
-#### 快速測試
-
-```bash
-# 只用最近 30 天數據
-python train_v3.py --quick
-
-# 預期時間: 5-10 分鐘
-# 用途: 驗證流程是否正常
-```
-
-#### 自定義 TP/SL
-
-```bash
-# 調整停利/停損
-python train_v3.py --tp 0.025 --sl 0.015
-
-# TP = 2.5%, SL = 1.5%
-```
-
-### 2. 訓練輸出
+### Training Process
 
 ```
-models_output/
-├─ catboost_long_v3_20260225_001234.pkl
-└─ catboost_short_v3_20260225_001234.pkl
+V3 Training Pipeline:
 
-training_reports/
-└─ v3_training_report_20260225_001234.json
+1. Load Data
+   │
+   ├─ 從 HuggingFace 載入 BTCUSDT 1m 數據
+   └─ 約 500k-1M 筆
 
-logs/
-└─ train_v3.log  ← 查看詳細日誌
-```
+2. Feature Engineering
+   │
+   ├─ 30 個優化特徵
+   ├─ TP: 1.2%, SL: 0.8%
+   ├─ Lookahead: 240 bars (4h)
+   └─ 預期 5-10% 標籤率
 
-### 3. 檢查訓練結果
+3. Train Long Model
+   │
+   ├─ CatBoost Classifier
+   ├─ 500 iterations
+   ├─ Early stopping
+   └─ Isotonic calibration
 
-```bash
-# 查看日誌中的關鍵資訊
-tail -100 logs/train_v3.log | grep -A 20 "PROBABILITY DISTRIBUTION"
+4. Train Short Model
+   │
+   ├─ 独立訓練
+   └─ 不同特徵權重
 
-# 應該看到:
-# Max: 0.6-0.8 (V2只有0.2)
-# > 0.20: 5-10% (V2幾乎0%)
-# Recommended threshold: 0.15-0.20
+5. Save & Report
+   │
+   ├─ 保存模型檔
+   └─ 生成評估報告
 ```
 
 ---
 
-## 📊 特徵設計
+## 📊 Expected Training Results
 
-### 特徵分組 (23個)
+### Good Performance
 
-#### 1. 價格特徵 (4個)
-
-```python
-returns_1m      # 1分鐘報酬率
-returns_5m      # 5分鐘報酬率
-returns_15m     # 15分鐘報酬率
-price_position  # 價格在60分鐘區間的位置
+```json
+{
+  "long_model": {
+    "auc": 0.65-0.72,
+    "precision": 0.55-0.65,
+    "recall": 0.50-0.65,
+    "probability_stats": {
+      "max": 0.60-0.80,
+      "p95": 0.25-0.35,
+      "p75": 0.12-0.18
+    }
+  },
+  "short_model": {
+    "auc": 0.65-0.72,
+    "precision": 0.55-0.65,
+    "recall": 0.50-0.65,
+    "probability_stats": {
+      "max": 0.60-0.80,
+      "p95": 0.25-0.35,
+      "p75": 0.12-0.18
+    }
+  }
+}
 ```
 
-**用途**: 捕捉短期價格動態
-
-#### 2. 動能特徵 (6個)
-
-```python
-rsi_14          # 14期RSI
-rsi_28          # 28期RSI
-macd            # MACD標準化
-momentum_5      # 5分鐘動能
-momentum_15     # 15分鐘動能
-momentum_30     # 30分鐘動能
-```
-
-**用途**: 判斷趨勢強度和方向
-
-#### 3. 波動率特徵 (4個)
-
-```python
-atr_pct         # ATR百分比
-bb_width        # 布林通道寬度
-bb_position     # 價格在布林通道的位置
-volatility_ratio # 當前波動率 vs 歷史平均
-```
-
-**用途**: 評估市場狀態
-
-#### 4. 成交量特徵 (3個)
-
-```python
-volume_ratio       # 成交量比率
-price_volume_corr  # 價量相關性
-vwap_deviation     # 與VWAP的偏離
-```
-
-**用途**: 確認價格移動的強度
-
-#### 5. 微觀結構特徵 (3個)
-
-```python
-efficiency_ratio   # 價格效率 (直線度)
-time_since_high    # 距離最高點的時間
-time_since_low     # 距離最低點的時間
-```
-
-**用途**: 捕捉短期市場行為
-
-#### 6. 多時間框架特徵 (3個)
-
-```python
-rsi_5m        # 5分鐘RSI
-atr_5m        # 5分鐘ATR%
-momentum_15m  # 15分鐘動能
-```
-
-**用途**: 整合更大時間尺度的資訊
-
-### 為什麼只有 23 個?
+### Label Distribution
 
 ```
-V1: 9個特徵
-- 太少,信息不足
-
-V2: 44-54個特徵
-- 太多,產生噪音
-- 過擬合風險高
-- 機率分佈被壓縮
-
-V3: 23個特徵
-- 精簡但有效
-- 每個特徵都有明確目的
-- 降低維度災難
-- 更好的機率分佈
+好的標籤分佈:
+- Positive rate: 5-10%
+- 太低 (< 3%): 標籤太嚴格
+- 太高 (> 15%): 標籤太寬鬆
 ```
 
 ---
 
-## 🏷️ 標籤定義
+## 🛡️ Backtesting V3
 
-### V3 標籤邏輯
+### GUI Integration
 
-```python
-對於 Long 交易:
-  Entry Price = current_close
-  TP Price = Entry × (1 + tp_pct)  # 1.02
-  SL Price = Entry × (1 - sl_pct)  # 0.99
-  
-  在未來 120 根 K 線 (2小時) 內:
-  
-  if TP 先觸發:
-      label = 1  ✅ Profitable
-  
-  if SL 先觸發:
-      label = 0  ❌ Unprofitable
-  
-  if 都沒觸發:
-      label = 0  ❌ Unprofitable
-
-對於 Short 交易:
-  同理,但方向相反
-```
-
-### 與 V1/V2 的差異
-
-#### V1 標籤
-
-```python
-# 只看固定時間後的價格
-label = 1 if future_price > entry_price * 1.01 else 0
-
-問題:
-- 沒考慮停損
-- 沒考慮時間優先性
-- 不符合實際交易
-```
-
-#### V2 標籤
-
-```python
-# 複雜的多條件判斷
-label = complex_condition(
-    price_move,
-    volume_change,
-    volatility,
-    ...
-)
-
-問題:
-- 過於嚴格
-- Positive rate 太低 (< 5%)
-- 導致機率分佈壓縮
-```
-
-#### V3 標籤
-
-```python
-# 基於實際 TP/SL
-label = 1 if tp_hit_first else 0
-
-優點:
-+ 符合實際交易邏輯
-+ Positive rate 合理 (30-40%)
-+ 機率分佈健康
-+ 直接對應回測邏輯
-```
-
-### 預期標籤分佈
+V3 模型會自動被 GUI 識別:
 
 ```
-TP = 2%, SL = 1% (2:1):
-  Long:  35-40% positive
-  Short: 35-40% positive
+在 GUI 回測標籤:
 
-TP = 1.5%, SL = 1% (1.5:1):
-  Long:  40-45% positive
-  Short: 40-45% positive
+模型選擇:
+├─ V1: 舊版模型
+├─ V2: 當前版本 (有問題)
+└─ V3: 新版本 (推薦!) ←
 
-TP = 2.5%, SL = 1.5% (1.67:1):
-  Long:  30-35% positive
-  Short: 30-35% positive
+點擊 V3 → 自動載入最新 V3 模型
 ```
 
----
-
-## 🎓 訓練流程
-
-### 雙階段訓練
+### Recommended Settings
 
 ```
-Stage 1: CatBoost 分類器
-├─ Loss: Logloss
-├─ Iterations: 1000 (quick: 200)
-├─ Learning rate: 0.05
-├─ Depth: 6
-├─ L2 regularization: 3
-└─ Early stopping: 50 rounds
-
-Stage 2: Isotonic 校準
-├─ Method: Isotonic regression
-├─ CV: prefit (使用 validation set)
-└─ 目的: 修正機率分佈
-```
-
-### 為什麼雙階段?
-
-```
-問題: CatBoost 的原始機率可能不準確
-
-CatBoost 說 0.30:
-- 實際勝率可能是 0.40 (低估)
-- 或實際勝率可能是 0.20 (高估)
-
-解決: Isotonic 校準
-- 學習機率 → 實際勝率的映射
-- 修正偏差
-- 更可靠的機率輸出
-```
-
-### 訓練監控
-
-訓練過程中會輸出:
-
-```
-1. 基礎性能
-   ├─ Train AUC: 0.65-0.75
-   └─ Val AUC: 0.60-0.70
-
-2. 機率分佈
-   ├─ Min: ~0.00
-   ├─ Max: 0.60-0.80  ← 關鍵!
-   ├─ Median: 0.30-0.35
-   └─ 95th %ile: 0.50-0.60
-
-3. 不同閾值的表現
-   ├─ >= 0.10: 勝率 52-55%
-   ├─ >= 0.15: 勝率 55-58%
-   ├─ >= 0.20: 勝率 58-62%
-   └─ >= 0.25: 勝率 62-65%
-
-4. 推薦閾值
-   ├─ For 55%+ win rate: 0.12-0.15
-   └─ For 60%+ win rate: 0.18-0.22
-```
-
-### 特徵重要性
-
-預期 Top 10:
-
-```
-1. momentum_15        (15分鐘動能)
-2. rsi_14            (RSI)
-3. efficiency_ratio   (價格效率)
-4. atr_pct           (波動率)
-5. price_position    (價格位置)
-6. momentum_5m       (5分鐘動能)
-7. volume_ratio      (成交量比率)
-8. bb_position       (布林位置)
-9. rsi_5m            (5分鐘RSI)
-10. macd             (MACD)
-```
-
----
-
-## 💻 使用模型
-
-### 在回測中使用
-
-模型會自動在 `models_output/` 目錄中被檢測到。
-
-GUI 會顯示:
-
-```
-可用模型:
-├─ V1: catboost_long_model_xxx.pkl
-├─ V2: catboost_long_v2_xxx.pkl
-└─ V3: catboost_long_v3_xxx.pkl ⭐ 最新
-```
-
-### 推薦回測設定
-
-```bash
-# 第一次測試 V3
-
 回測設定:
-├─ 回測天數: 90
-├─ 槓桿: 1x
-└─ 模型: V3 (自動選最新)
+├─ 回測天數: 90-180
+└─ 槓桿: 1-3x
 
 閾值設定:
-├─ Long 閾值: 0.15  ← 從訓練日誌獲取
-└─ Short 閾值: 0.15
+├─ Long 閾值: 0.12-0.15
+└─ Short 閾值: 0.12-0.15
 
 資金管理:
-├─ TP: 2.0%  ← 與訓練時相同
-└─ SL: 1.0%
+├─ TP: 1.5-2.0%
+└─ SL: 0.8-1.0%
 ```
 
-### 預期回測結果
-
-如果 V3 訓練成功:
+### Expected Backtest Results
 
 ```
-閾值 0.15:
-├─ 交易數: 100-200 筆
-├─ 勝率: 55-60%
-├─ Profit Factor: 1.5-2.0
-└─ 總報酬: 5-10%
+好的 V3 回測結果:
 
-閾值 0.20:
-├─ 交易數: 50-100 筆
-├─ 勝率: 58-63%
-├─ Profit Factor: 1.8-2.5
-└─ 總報酬: 4-8%
+交易數: 150-300 筆 (90天)
+勝率: 45-55%
+Profit Factor: 1.5-2.5
+總報酬: 5-15% (90天, 無槓桿)
+
+加入 3x 槓桿:
+總報酬: 15-45% (90天)
+年化: 60-180%
 ```
 
 ---
 
-## 📈 與 V1/V2 對比
+## ⚠️ Troubleshooting
 
-### 特徵數量
+### Problem 1: Label Rate Too Low
 
-| 版本 | 特徵數 | 說明 |
-|------|--------|------|
-| V1 | 9 | 基礎版 |
-| V2 | 44-54 | 過多,噪音大 |
-| V3 | 23 | 精簡但強大 ✅ |
+```
+症狀:
+Positive samples: < 3%
 
-### 標籤定義
+原因:
+- TP 設太高
+- Lookahead 太短
 
-| 版本 | 方法 | Positive Rate |
-|------|------|---------------|
-| V1 | 固定時間 | 45-50% |
-| V2 | 多條件 | < 5% ❌ |
-| V3 | TP/SL優先 | 35-40% ✅ |
-
-### 機率分佈
-
-| 版本 | Max Prob | > 0.20 比例 |
-|------|----------|-------------|
-| V1 | 0.45 | 5-8% |
-| V2 | 0.21 | < 0.1% ❌ |
-| V3 | 0.60-0.80 | 5-10% ✅ |
-
-### 回測表現
-
-| 版本 | 勝率 | PF | 年化報酬 |
-|------|------|-----|----------|
-| V1 | 35% | 1.01 | 0.2% |
-| V2 | N/A | N/A | N/A (沒交易) |
-| V3 | 55-60% | 1.5-2.0 | 10-20% ✅ |
-
----
-
-## 🐛 故障排除
-
-### 問題 1: 訓練時記憶體不足
-
-```bash
-# 使用 quick 模式
-python train_v3.py --quick
-
-# 或減少 iterations
-# 在 train_v3.py 中修改:
-iterations = 500  # 從 1000 降低
+解決:
+在 train_v3.py 修改:
+tp_target=0.010,   # 1.2% → 1.0%
+lookahead_bars=300 # 240 → 300
 ```
 
-### 問題 2: Max probability 還是太低
+### Problem 2: Max Probability Too Low
 
-如果訓練後 Max prob < 0.50:
+```
+症狀:
+Max probability < 0.5
 
-```python
-# 可能需要:
-1. 調整 TP/SL 比例
-   python train_v3.py --tp 0.015 --sl 0.01
+原因:
+- 模型不確定
+- 特徵不夠強
 
-2. 或增加訓練數據
-   # 不使用 --quick
-
-3. 或調整模型參數
-   # train_v3.py 中:
-   depth=8  # 從 6 增加
+解決:
+- 檢查 AUC 是否 > 0.65
+- 如果 AUC 太低,需要重新設計特徵
 ```
 
-### 問題 3: 特徵錯誤
+### Problem 3: Still No Trades in Backtest
 
-```bash
-# 確認特徵生成正常
-python -c "
-from utils.feature_engineering_v3 import FeatureEngineerV3
-fe = FeatureEngineerV3()
-print('Features:', len(fe.get_feature_list()))
-print(fe.get_feature_list())
-"
+```
+症狀:
+訓練完但回測還是 0 筆交易
 
-# 應該顯示 23 個特徵
+檢查:
+1. 確認 GUI 選了 V3 模型
+2. 查看 max probability
+3. 降低閾值到 0.10
+
+如果還是沒有:
+- 提供 training log
+- 提供 backtest log
 ```
 
 ---
 
-## 📚 下一步
+## 📝 Training Log Example
 
-### 1. 訓練模型
+正常的 V3 訓練 log 應該看起來像:
+
+```
+[V3] Creating features from 800,000 1m bars
+[V3] Label config: TP=1.2%, SL=0.8%, Lookahead=240
+[V3] Computing core price features...
+[V3] Computing volatility features...
+[V3] Computing trend features...
+[V3] Computing volume features...
+[V3] Computing microstructure features...
+[V3] Computing directional pressure...
+[V3] Computing oscillators...
+[V3] Computing market regime...
+[V3] Generating labels...
+[V3] Long signals: 45,821 (5.73%)  ← 希望 5-10%
+[V3] Short signals: 52,104 (6.51%) ← 希望 5-10%
+[V3] Features created: 32 columns
+
+TRAINING LONG MODEL
+Features: 30
+Positive samples: 45,821 (5.73%)
+Train set: 640,000 samples
+Test set: 160,000 samples
+
+Training CatBoost model...
+[100] AUC: 0.6823
+[200] AUC: 0.6945
+[300] AUC: 0.6998
+Best iteration: 312
+
+Calibrating probabilities...
+
+Evaluating model...
+AUC: 0.7021 ← > 0.65 就 OK
+
+Classification Report:
+Precision: 0.6124 ← > 0.55 就 OK
+Recall:    0.5845
+F1-Score:  0.5981
+
+Probability Distribution:
+Min:  0.0234
+25%:  0.0856
+50%:  0.1123
+75%:  0.1589
+95%:  0.3421 ← 超過 0.20 就好
+Max:  0.7234 ← 希望 > 0.60
+
+Precision @ Thresholds:
+  @ 0.10: Precision=58.2%, Coverage=12.5%
+  @ 0.15: Precision=64.1%, Coverage=6.2%  ← 這個好
+  @ 0.20: Precision=69.5%, Coverage=3.1%
+  @ 0.25: Precision=73.2%, Coverage=1.4%
+```
+
+---
+
+## 🎯 Quick Comparison
+
+```
+| 指標 | V2 | V3 |
+|------|----|----|---|
+| 特徵數 | 54 | 30 |
+| TP 目標 | 2.0% | 1.2% |
+| SL 限制 | 1.0% | 0.8% |
+| Lookahead | 480 (8h) | 240 (4h) |
+| 標籤率 | < 2% | 5-10% |
+| Max Prob | 0.21 | 0.60-0.80 |
+| 預期勝率 | 35% | 45-55% |
+| 預期 PF | 1.0-1.2 | 1.5-2.5 |
+```
+
+---
+
+## 🚀 Next Steps
+
+### 1. 立即訓練
 
 ```bash
+git pull origin main
 python train_v3.py
 ```
 
 ### 2. 檢查結果
 
 ```bash
-tail -200 logs/train_v3.log
+# 查看訓練 log
+tail -100 logs/train_v3.log
+
+# 查看報告
+cat training_reports/v3_training_report_*.json
 ```
 
 ### 3. 回測測試
 
-在 GUI 中:
+```
+啟動 GUI:
+streamlit run main.py
+
+回測設定:
 - 選擇 V3 模型
-- 使用推薦閾值
-- 執行回測
+- 閾值: 0.15
+- 90天
+- 1x 槓桿
 
-### 4. 迭代優化
+執行標準回測
+```
 
-如果結果不理想:
-- 調整 TP/SL
-- 調整閾值
-- 或啟用自適應引擎
+### 4. 優化參數
+
+根據回測結果調整:
+- 閾值 (0.12-0.20)
+- 槓桿 (1-5x)
+- TP/SL
+
+---
+
+## 📚 Related Documents
+
+- [Strategy Optimization Guide](STRATEGY_OPTIMIZATION_GUIDE.md)
+- [GUI Usage Guide](GUI_USAGE_GUIDE.md)
+- [Quick Start](QUICK_START.md)
 
 ---
 
-**版本**: 3.0  
-**最後更新**: 2026-02-25  
-**作者**: Zong
+**Version**: 3.0.0  
+**Date**: 2026-02-25  
+**Author**: Zong
 
 ---
+
+**🎯 核心改進**: V3 的目標是讓機率分佈合理,讓你可以在 0.10-0.20 的閾值範圍內找到足夠的交易機會,同時保持 45%+ 的勝率!
