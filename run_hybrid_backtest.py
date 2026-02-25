@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 執行混合激進回測
 
@@ -13,15 +14,22 @@ Chronos + XGBoost v3 + 激進策略
 import argparse
 import logging
 import sys
+import os
 from pathlib import Path
 from datetime import datetime, timedelta
 import pandas as pd
+
+# Fix Windows console encoding
+if sys.platform == 'win32':
+    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
+    os.environ['PYTHONIOENCODING'] = 'utf-8'
 
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('logs/hybrid_backtest.log'),
+        logging.FileHandler('logs/hybrid_backtest.log', encoding='utf-8'),
         logging.StreamHandler(sys.stdout)
     ]
 )
@@ -44,11 +52,11 @@ def parse_args():
     parser.add_argument('--target-multiplier', type=float, default=2.0,
                        help='目標倍數 (2.0 = 翻倍)')
     parser.add_argument('--base-position', type=float, default=20.0,
-                       help='基礎仓位 (%)')
+                       help='基礎倉位 (%)')
     parser.add_argument('--max-position', type=float, default=50.0,
-                       help='最大仓位 (%)')
+                       help='最大倉位 (%)')
     parser.add_argument('--leverage', type=float, default=2.0,
-                       help='杠杆倍數')
+                       help='槓桿倍數')
     
     # 模型路徑
     parser.add_argument('--xgb-long', type=str, 
@@ -79,15 +87,15 @@ def main():
     if args.quick:
         args.days = 7
         args.chronos_model = 'amazon/chronos-t5-tiny'
-        logger.info("⚡ Quick test mode: 7 days, tiny model")
+        logger.info("[QUICK] Quick test mode: 7 days, tiny model")
     
     logger.info("="*80)
-    logger.info("🚀 HYBRID AGGRESSIVE BACKTEST")
+    logger.info("[START] HYBRID AGGRESSIVE BACKTEST")
     logger.info("="*80)
     logger.info(f"Symbol: {args.symbol}")
     logger.info(f"Timeframe: {args.timeframe}")
     logger.info(f"Days: {args.days}")
-    logger.info(f"Target: ${args.initial_capital:,.0f} → ${args.initial_capital * args.target_multiplier:,.0f}")
+    logger.info(f"Target: ${args.initial_capital:,.0f} -> ${args.initial_capital * args.target_multiplier:,.0f}")
     logger.info(f"Strategy: {'AGGRESSIVE' if args.aggressive else 'CONSERVATIVE'}")
     logger.info(f"Martingale: {'YES' if args.use_martingale else 'NO'}")
     logger.info(f"Leverage: {args.leverage}x")
@@ -107,7 +115,7 @@ def main():
         end_date=end_date.strftime('%Y-%m-%d')
     )
     
-    logger.info(f"✅ Loaded {len(df)} bars")
+    logger.info(f"[OK] Loaded {len(df)} bars")
     
     # Step 2: Chronos 預測
     logger.info(f"\nStep 2/5: Running Chronos predictions...")
@@ -127,7 +135,7 @@ def main():
         sl_pct=0.6
     )
     
-    logger.info("✅ Chronos predictions complete")
+    logger.info("[OK] Chronos predictions complete")
     
     # Step 3: XGBoost 特徵工程
     logger.info(f"\nStep 3/5: Engineering features for XGBoost...")
@@ -137,7 +145,7 @@ def main():
     xgb_short_path = Path(args.xgb_short)
     
     if not xgb_long_path.exists() or not xgb_short_path.exists():
-        logger.error(f"❌ XGBoost models not found!")
+        logger.error(f"[ERROR] XGBoost models not found!")
         logger.error(f"Expected: {xgb_long_path}")
         logger.error(f"Expected: {xgb_short_path}")
         logger.error(f"\nPlease train XGBoost v3 models first:")
@@ -152,7 +160,7 @@ def main():
         timeframe=args.timeframe
     )
     
-    logger.info(f"✅ Features engineered: {len(df_features.columns)} columns")
+    logger.info(f"[OK] Features engineered: {len(df_features.columns)} columns")
     
     # Step 4: 初始化回測引擎
     logger.info(f"\nStep 4/5: Initializing backtest engine...")
@@ -198,7 +206,7 @@ def main():
     
     # 顯示結果
     if not result['success']:
-        logger.error(f"❌ Backtest failed: {result.get('error')}")
+        logger.error(f"[ERROR] Backtest failed: {result.get('error')}")
         sys.exit(1)
     
     stats = result['stats']
@@ -206,14 +214,14 @@ def main():
     
     # 詳細統計
     logger.info(f"\n" + "="*80)
-    logger.info("📊 DETAILED STATISTICS")
+    logger.info("[STATS] DETAILED STATISTICS")
     logger.info("="*80)
     
     # 交易統計
     tp_trades = len(trades_df[trades_df['exit_reason'] == 'TP'])
     sl_trades = len(trades_df[trades_df['exit_reason'] == 'SL'])
     
-    logger.info(f"\n📊 Trade Breakdown:")
+    logger.info(f"\n[TRADES] Trade Breakdown:")
     logger.info(f"  TP Trades: {tp_trades} ({tp_trades/stats['total_trades']*100:.1f}%)")
     logger.info(f"  SL Trades: {sl_trades} ({sl_trades/stats['total_trades']*100:.1f}%)")
     logger.info(f"  Avg Win: +{stats['avg_win']:.2f}%")
@@ -223,7 +231,7 @@ def main():
     daily_trades = stats['total_trades'] / args.days
     daily_return = stats['total_return'] / args.days
     
-    logger.info(f"\n📅 Daily Statistics:")
+    logger.info(f"\n[DAILY] Daily Statistics:")
     logger.info(f"  Trades/Day: {daily_trades:.1f}")
     logger.info(f"  Return/Day: {daily_return:+.2f}%")
     
@@ -231,19 +239,19 @@ def main():
     target_return = (args.target_multiplier - 1) * 100
     achievement = (stats['total_return'] / target_return) * 100
     
-    logger.info(f"\n🎯 Target Achievement:")
+    logger.info(f"\n[TARGET] Target Achievement:")
     logger.info(f"  Target: +{target_return:.0f}%")
     logger.info(f"  Actual: +{stats['total_return']:.2f}%")
     logger.info(f"  Achievement: {achievement:.1f}%")
     
     if achievement >= 100:
-        logger.info(f"\n🎉 ✅ TARGET ACHIEVED! ✅ 🎉")
+        logger.info(f"\n[SUCCESS] TARGET ACHIEVED!")
     elif achievement >= 70:
-        logger.info(f"\n👍 Close! Adjust parameters to reach target.")
+        logger.info(f"\n[GOOD] Close! Adjust parameters to reach target.")
     else:
-        logger.info(f"\n⚠️ Far from target. Consider:")
-        logger.info(f"  1. Increase leverage ({args.leverage}x → {args.leverage * 1.5}x)")
-        logger.info(f"  2. Increase position size ({args.base_position}% → {args.base_position * 1.2:.0f}%)")
+        logger.info(f"\n[WARN] Far from target. Consider:")
+        logger.info(f"  1. Increase leverage ({args.leverage}x -> {args.leverage * 1.5}x)")
+        logger.info(f"  2. Increase position size ({args.base_position}% -> {args.base_position * 1.2:.0f}%)")
         logger.info(f"  3. Lower signal thresholds")
         logger.info(f"  4. Use martingale strategy")
     
@@ -255,10 +263,10 @@ def main():
     trades_file = output_dir / f'hybrid_trades_{args.symbol}_{args.timeframe}_{timestamp}.csv'
     
     trades_df.to_csv(trades_file, index=False)
-    logger.info(f"\n💾 Results saved: {trades_file}")
+    logger.info(f"\n[SAVE] Results saved: {trades_file}")
     
     logger.info(f"\n" + "="*80)
-    logger.info("✅ BACKTEST COMPLETE")
+    logger.info("[DONE] BACKTEST COMPLETE")
     logger.info("="*80)
     
     return result
@@ -271,10 +279,10 @@ if __name__ == "__main__":
     try:
         result = main()
     except KeyboardInterrupt:
-        logger.warning("\n⚠️ Backtest interrupted by user")
+        logger.warning("\n[STOP] Backtest interrupted by user")
         sys.exit(1)
     except Exception as e:
-        logger.error(f"\n❌ Backtest failed: {e}")
+        logger.error(f"\n[ERROR] Backtest failed: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
