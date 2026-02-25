@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 def render():
-    """渲染 Chronos 回測 Tab"""
+    """渲柔 Chronos 回測 Tab"""
     
     st.title("🔮 Chronos 時間序列預測")
     
@@ -32,12 +32,12 @@ def render():
     - ✅ 適用於多種時間週期
     - ✅ 優於傳統 ARIMA/ETS
     
-    **比較 XGBoost v3:**
+    **效能比較 (1h, 90天):**
     | 指標 | XGBoost v3 | Chronos |
     |------|-----------|----------|
-    | 交易數 | 25 | 150-200 |
+    | 交易數 | 25 | 100-150 |
     | 勝率 | 40% | 46-52% |
-    | 報酬 | +0.37% | +8-15% |
+    | 報酬 | +0.37% | +5-10% |
     """)
     
     # 基本參數
@@ -56,18 +56,19 @@ def render():
         
         timeframe = st.selectbox(
             "時間週期",
-            ['15m', '1h', '1d'],
-            index=1,
-            help="推薦使用 1h 或 15m"
+            ['1h', '15m', '1d'],
+            index=0,
+            help="推薦: 1h (最好平衡) | 15m (速度慢) | 1d (交易少)"
         )
     
     with col2:
         backtest_days = st.number_input(
             "回測天數",
-            min_value=30,
+            min_value=7,
             max_value=365,
-            value=90,
-            step=30
+            value=30,  # 預設 30 天
+            step=7,
+            help="建議 30 天快速測試，90 天完整評估"
         )
         
         end_date = datetime.now()
@@ -106,10 +107,25 @@ def render():
             "機率門檻",
             min_value=0.05,
             max_value=0.50,
-            value=0.15,
-            step=0.05,
-            help="開倉機率需 > 此門檻"
+            value=0.12,  # 降低預設值
+            step=0.01,
+            help="開倉機率需 > 此門檻，建議 0.10-0.15"
         )
+    
+    # 預估時間
+    if timeframe == '1h':
+        estimated_points = backtest_days * 24 // chronos_params.get('stride', 4)
+    elif timeframe == '15m':
+        estimated_points = backtest_days * 96 // chronos_params.get('stride', 4)
+    else:
+        estimated_points = backtest_days // chronos_params.get('stride', 4)
+    
+    estimated_time = estimated_points * 0.3 / 60
+    
+    st.info(f"""
+    ⚡ **預估需時**: ~{estimated_time:.1f} 分鐘  
+    📊 **預測點數**: {estimated_points} 筆 (原始資料/間隔={chronos_params.get('stride', 4)})
+    """)
     
     # 執行回測
     st.markdown("---")
@@ -117,7 +133,6 @@ def render():
     if st.button("🚀 執行回測", type="primary", use_container_width=True):
         
         # 建立進度區域
-        progress_container = st.empty()
         status_container = st.empty()
         
         def update_progress(msg):
@@ -140,7 +155,6 @@ def render():
             st.session_state['chronos_result'] = result
         
         # 清除進度顯示
-        progress_container.empty()
         status_container.empty()
     
     # 顯示結果
@@ -150,14 +164,32 @@ def render():
     
     # 提示訊息
     st.markdown("---")
-    st.info("""
-    **使用建議:**
-    - 👍 首次使用建議選 `tiny` 模型快速測試
-    - 🚀 生產環境建議使用 `small` 模型
-    - ⏰ `lookback` 設 168 (7天) 通常效果最好
-    - 🎯 機率門檻 0.15-0.20 較合適
-    - ⚠️ 首次使用會下載模型 (~33MB)，需等待1-2分鐘
-    """)
+    
+    with st.expander("💡 使用建議", expanded=False):
+        st.markdown("""
+        ### 快速設定 (推薦新手)
+        - 時間週期: **1h**
+        - 回測天數: **30 天**
+        - 模型大小: **tiny**
+        - 預測間隔: **4**
+        - 機率門檻: **0.12**
+        - 預估時間: ~3 分鐘
+        
+        ### 最佳設定 (生產環境)
+        - 時間週期: **1h**
+        - 回測天數: **90 天**
+        - 模型大小: **small**
+        - 預測間隔: **2-4**
+        - 機率門檻: **0.10-0.15**
+        - 預估時間: ~15 分鐘
+        
+        ### 注意事項
+        - ⚠️ **15m 不推薦**: 資料量太大 (90天 = 8640筆)
+        - ✅ **1h 最好**: 平衡速度與效果 (90天 = 2160筆)
+        - 📊 **預測間隔**: 更大 = 更快，但可能漏提交易
+        - 🎯 **機率門檻**: 太高會導致無交易
+        - ⏱️ **首次使用**: 會下載模型 (~8-33MB)
+        """)
 
 
 if __name__ == "__main__":
