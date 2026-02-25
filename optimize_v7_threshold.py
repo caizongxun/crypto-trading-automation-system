@@ -1,186 +1,73 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-v7 模型閾值優化
+v7 預測閾值優化
 
-目標: 找到最佳預測閾值,使 Precision >= 0.50
+目標: 找到最佳 prediction threshold 使策略獲利
 """
 
+import sys
 import pandas as pd
 import numpy as np
-import pickle
 from pathlib import Path
-import sys
-from sklearn.metrics import precision_score, recall_score, f1_score, roc_auc_score
+from datetime import datetime, timedelta
+import json
 
 if sys.platform == 'win32':
     sys.stdout.reconfigure(encoding='utf-8')
     sys.stderr.reconfigure(encoding='utf-8')
 
-def load_model(model_path: str):
-    """載入模型"""
-    with open(model_path, 'rb') as f:
-        data = pickle.load(f)
-    return data
+from backtest_v7_mean_reversion import MeanReversionBacktester
 
-def optimize_threshold_for_precision(y_true, y_pred_proba, target_precision=0.5, min_recall=0.1):
-    """
-    找到使 Precision >= target_precision 的最低閾值
-    
-    Args:
-        y_true: 真實標籤
-        y_pred_proba: 預測機率
-        target_precision: 目標 Precision
-        min_recall: 最低 Recall 要求 (避免太保守)
-    
-    Returns:
-        optimal_threshold, metrics
-    """
-    results = []
-    
-    for threshold in np.arange(0.3, 0.95, 0.02):
-        y_pred = (y_pred_proba >= threshold).astype(int)
-        
-        if y_pred.sum() == 0:  # 沒有預測為正
-            continue
-        
-        precision = precision_score(y_true, y_pred, zero_division=0)
-        recall = recall_score(y_true, y_pred, zero_division=0)
-        f1 = f1_score(y_true, y_pred, zero_division=0)
-        pred_rate = y_pred.mean()
-        
-        results.append({
-            'threshold': threshold,
-            'precision': precision,
-            'recall': recall,
-            'f1': f1,
-            'pred_rate': pred_rate,
-            'signals_per_day': pred_rate * 96  # 15m = 96 bars per day
-        })
-    
-    df_results = pd.DataFrame(results)
-    
-    # 找到 Precision >= target 且 Recall >= min_recall 的最低閾值
-    valid = df_results[
-        (df_results['precision'] >= target_precision) & 
-        (df_results['recall'] >= min_recall)
-    ]
-    
-    if len(valid) == 0:
-        print(f"警告: 無法達到 Precision >= {target_precision} 且 Recall >= {min_recall}")
-        print(f"嘗試放寬條件...")
-        # 放寬條件
-        valid = df_results[df_results['precision'] >= target_precision * 0.8]
-        if len(valid) == 0:
-            # 還是沒有,返回 F1 最高的
-            return df_results.loc[df_results['f1'].idxmax()], df_results
-    
-    optimal = valid.iloc[0]  # 最低閾值
-    
-    return optimal, df_results
 
-def analyze_model(model_path: str, X_test, y_test, model_type: str):
-    """
-    分析模型並找到最佳閾值
+def test_threshold(
+    upper_model_path: str,
+    lower_model_path: str,
+    df: pd.DataFrame,
+    start_idx: int,
+    threshold: float
+) -> dict:
+    """測試特定預測閾值"""
     
-    Args:
-        model_path: 模型路徑
-        X_test: 測試特徵
-        y_test: 測試標籤
-        model_type: 'upper' or 'lower'
-    """
-    print("="*80)
-    print(f"[{model_type.upper()}] 模型分析")
-    print("="*80)
-    
-    # 載入模型
-    data = load_model(model_path)
-    model = data['model']
-    
-    # 預測
-    y_pred_proba = model.predict_proba(X_test)[:, 1]
-    
-    # AUC
-    auc = roc_auc_score(y_test, y_pred_proba)
-    print(f"\nAUC: {auc:.4f}")
-    print(f"實際正樣本率: {y_test.mean():.2%}")
-    print(f"")
-    
-    # 優化閾值
-    print("尋找最佳閾值...")
-    optimal, all_results = optimize_threshold_for_precision(
-        y_test.values, y_pred_proba, 
-        target_precision=0.50,
-        min_recall=0.10
+    backtester = MeanReversionBacktester(
+        upper_model_path=upper_model_path,
+        lower_model_path=lower_model_path,
+        initial_capital=10000,
+        position_size=0.02,
+        leverage=10,
+        threshold=threshold
     )
     
-    print(f"\n最佳閾值: {optimal['threshold']:.3f}")
-    print(f"  Precision: {optimal['precision']:.4f}")
-    print(f"  Recall: {optimal['recall']:.4f}")
-    print(f"  F1: {optimal['f1']:.4f}")
-    print(f"  預測正率: {optimal['pred_rate']:.2%}")
-    print(f"  每日訊號數: {optimal['signals_per_day']:.1f}")
+    report = backtester.run_backtest(df, start_idx=start_idx)
     
-    # 顯示不同閾值的效果
-    print(f"\n不同閾值對比:")
-    print(f"{'Threshold':<10} {'Precision':<10} {'Recall':<10} {'F1':<10} {'訊號/天':<10}")
-    print("-" * 60)
-    
-    for _, row in all_results.iloc[::5].iterrows():  # 每5個顯示一個
-        print(f"{row['threshold']:<10.2f} {row['precision']:<10.3f} {row['recall']:<10.3f} {row['f1']:<10.3f} {row['signals_per_day']:<10.1f}")
-    
-    # 保存優化後的模型
-    data['optimal_threshold'] = optimal['threshold']
-    data['threshold_metrics'] = {
-        'precision': float(optimal['precision']),
-        'recall': float(optimal['recall']),
-        'f1': float(optimal['f1']),
-        'pred_rate': float(optimal['pred_rate']),
-        'signals_per_day': float(optimal['signals_per_day'])
-    }
-    
-    # 保存
-    optimized_path = model_path.replace('.pkl', '_optimized.pkl')
-    with open(optimized_path, 'wb') as f:
-        pickle.dump(data, f)
-    
-    print(f"\n已保存優化模型: {optimized_path}")
-    
-    return optimal, all_results
+    return report
+
 
 if __name__ == '__main__':
-    print("\n載入最新的 v7 模型...")
+    print("\n" + "="*80)
+    print("[PREDICTION THRESHOLD OPTIMIZATION]")
+    print("="*80)
     
+    # 找模型
     models_dir = Path('models_output')
-    
-    # 找最新的模型
-    upper_models = sorted(models_dir.glob('keltner_upper_15m_v7_*.pkl'))
-    lower_models = sorted(models_dir.glob('keltner_lower_15m_v7_*.pkl'))
+    upper_models = sorted(models_dir.glob('keltner_upper_*_v7mr_*.pkl'))
+    lower_models = sorted(models_dir.glob('keltner_lower_*_v7mr_*.pkl'))
     
     if not upper_models or not lower_models:
-        print("錯誤: 找不到 v7 模型文件")
-        print("請先運行 train_v7_keltner_bounce.py 訓練模型")
+        print("錯誤: 找不到 v7mr 模型")
         sys.exit(1)
     
-    upper_model_path = str(upper_models[-1])
-    lower_model_path = str(lower_models[-1])
+    upper_path = str(upper_models[-1])
+    lower_path = str(lower_models[-1])
     
-    print(f"\nUpper model: {Path(upper_model_path).name}")
-    print(f"Lower model: {Path(lower_model_path).name}")
-    
-    # 重新載入測試數據
-    print("\n重新載入數據進行閾值優化...")
-    
-    from datetime import datetime, timedelta
-    from utils.hf_data_loader import load_klines
-    from train_v7_keltner_bounce import (
-        calculate_keltner_channels, 
-        identify_touch_events,
-        calculate_bounce_features,
-        create_bounce_labels
-    )
+    print(f"\nUsing models:")
+    print(f"  {Path(upper_path).name}")
+    print(f"  {Path(lower_path).name}")
     
     # 載入數據
+    print(f"\nLoading data...")
+    from utils.hf_data_loader import load_klines
+    
     df = load_klines(
         symbol='BTCUSDT',
         timeframe='15m',
@@ -188,64 +75,139 @@ if __name__ == '__main__':
         end_date=datetime.now().strftime('%Y-%m-%d')
     )
     
-    print(f"載入 {len(df)} 根K線")
+    oos_start = int(len(df) * 0.9)
+    print(f"OOS period: {len(df) - oos_start} bars")
     
-    # 計算通道和特徵
-    upper, middle, lower = calculate_keltner_channels(df, 20, 14, 2.0)
-    upper_touch, lower_touch = identify_touch_events(df, upper, lower)
-    features = calculate_bounce_features(df, upper, middle, lower)
-    upper_bounce_labels, lower_bounce_labels = create_bounce_labels(df, upper_touch, lower_touch, 8)
+    # 測試不同 threshold
+    print(f"\n{'='*80}")
+    print("Testing different prediction thresholds...")
+    print(f"{'='*80}\n")
     
-    # 清理
-    features = features.fillna(0).replace([np.inf, -np.inf], 0)
+    results = []
     
-    # 取測試集 (最後 10%)
-    X_upper = features[upper_touch].copy()
-    y_upper = upper_bounce_labels[upper_touch].copy()
-    X_lower = features[lower_touch].copy()
-    y_lower = lower_bounce_labels[lower_touch].copy()
+    # 測試範圍: 0.5 到 0.9
+    test_thresholds = [0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90]
     
-    # 取最後 10% 作為測試集
-    test_start_upper = int(len(X_upper) * 0.9)
-    test_start_lower = int(len(X_lower) * 0.9)
+    for threshold in test_thresholds:
+        print(f"\n[Testing Threshold = {threshold:.2f}]")
+        print("-" * 80)
+        
+        try:
+            report = test_threshold(
+                upper_path, lower_path, df, oos_start, threshold
+            )
+            
+            s = report['summary']
+            
+            result = {
+                'threshold': threshold,
+                'total_trades': s['total_trades'],
+                'win_rate': s['win_rate'],
+                'total_return_pct': s['total_return_pct'],
+                'profit_factor': s['profit_factor'],
+                'max_drawdown': s['max_drawdown'],
+                'sharpe_ratio': s['sharpe_ratio'],
+                'avg_win': s['avg_win'],
+                'avg_loss': s['avg_loss'],
+                'final_capital': s['final_capital'],
+                'avg_bars_held': s['avg_bars_held']
+            }
+            
+            results.append(result)
+            
+            print(f"  交易數: {s['total_trades']}")
+            print(f"  勝率: {s['win_rate']:.2%}")
+            print(f"  總報酬: {s['total_return_pct']:.2%}")
+            print(f"  盈虧比: {s['profit_factor']:.2f}")
+            print(f"  平均獲利: ${s['avg_win']:.2f}")
+            print(f"  平均虧損: ${s['avg_loss']:.2f}")
+            print(f"  最大回撤: {s['max_drawdown']:.2%}")
+            print(f"  Sharpe: {s['sharpe_ratio']:.2f}")
+            
+        except Exception as e:
+            print(f"  錯誤: {e}")
+            import traceback
+            traceback.print_exc()
+            continue
     
-    X_test_upper = X_upper.iloc[test_start_upper:]
-    y_test_upper = y_upper.iloc[test_start_upper:]
-    X_test_lower = X_lower.iloc[test_start_lower:]
-    y_test_lower = y_lower.iloc[test_start_lower:]
+    # 結果比較
+    if results:
+        print(f"\n\n{'='*80}")
+        print("[RESULTS COMPARISON]")
+        print(f"{'='*80}\n")
+        
+        df_results = pd.DataFrame(results)
+        
+        # 排序依總報酬
+        df_results = df_results.sort_values('total_return_pct', ascending=False)
+        
+        print(f"{'Thresh':<8} {'Trades':<8} {'Win%':<8} {'Return%':<10} {'PF':<8} {'Sharpe':<8} {'AvgWin':<10} {'AvgLoss':<10}")
+        print("-" * 90)
+        
+        for _, row in df_results.iterrows():
+            print(f"{row['threshold']:<8.2f} {row['total_trades']:<8.0f} {row['win_rate']*100:<8.1f} {row['total_return_pct']*100:<10.1f} {row['profit_factor']:<8.2f} {row['sharpe_ratio']:<8.2f} ${row['avg_win']:<9.2f} ${row['avg_loss']:<9.2f}")
+        
+        # 找最佳參數
+        print(f"\n\n{'='*80}")
+        print("[BEST CONFIGURATION]")
+        print(f"{'='*80}\n")
+        
+        # 篩選: 報酬 > 0
+        valid = df_results[df_results['total_return_pct'] > 0]
+        
+        if len(valid) > 0:
+            best = valid.iloc[0]
+            print(f"最佳 Threshold: {best['threshold']:.2f}")
+            print(f"")
+            print(f"  交易數: {best['total_trades']:.0f}")
+            print(f"  總報酬: {best['total_return_pct']:.2%}")
+            print(f"  勝率: {best['win_rate']:.2%}")
+            print(f"  盈虧比: {best['profit_factor']:.2f}")
+            print(f"  Sharpe Ratio: {best['sharpe_ratio']:.2f}")
+            print(f"  最大回撤: {best['max_drawdown']:.2%}")
+            print(f"  最終資金: ${best['final_capital']:,.2f}")
+            print(f"  平均獲利: ${best['avg_win']:.2f}")
+            print(f"  平均虧損: ${best['avg_loss']:.2f}")
+            print(f"  平均持有: {best['avg_bars_held']:.1f} bars")
+            print(f"")
+            print(f"建議: 使用 threshold = {best['threshold']:.2f} 進行交易")
+            
+            # 計算每日交易頻率
+            total_days = (len(df) - oos_start) / 96  # 15m = 96 bars per day
+            trades_per_day = best['total_trades'] / total_days
+            print(f"  每日交易數: {trades_per_day:.1f}")
+            
+        else:
+            print("警告: 所有配置都無法獲利")
+            print("")
+            print("可能原因:")
+            print("  1. TP/SL 設置不當 (平均獲利 < 平均虧損)")
+            print("  2. 策略本身不適合通道交易")
+            print("  3. 需要使用固定 RR 比例 (不是中軌)")
+            print("")
+            
+            # 顯示最佳不虧配置
+            best = df_results.iloc[0]
+            print(f"最佳不虧配置: Threshold = {best['threshold']:.2f}")
+            print(f"  交易數: {best['total_trades']:.0f}")
+            print(f"  總報酬: {best['total_return_pct']:.2%}")
+            print(f"  勝率: {best['win_rate']:.2%}")
+            print(f"  盈虧比: {best['profit_factor']:.2f}")
+            print(f"  平均獲利: ${best['avg_win']:.2f}")
+            print(f"  平均虧損: ${best['avg_loss']:.2f}")
+            print("")
+            print("分析: 即使最低虧損配置仍然虧損,說明策略核心邏輯有問題")
+            print("      需要改變 TP/SL 設定方式")
+        
+        # 保存結果
+        output_dir = Path('optimization_results')
+        output_dir.mkdir(exist_ok=True)
+        
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        df_results.to_csv(output_dir / f'threshold_optimization_{timestamp}.csv', index=False)
+        
+        print(f"\n結果已保存: {output_dir / f'threshold_optimization_{timestamp}.csv'}")
+        print("="*80)
     
-    print(f"\nUpper 測試樣本: {len(X_test_upper)}")
-    print(f"Lower 測試樣本: {len(X_test_lower)}")
-    
-    # 分析並優化
-    upper_optimal, upper_results = analyze_model(
-        upper_model_path, X_test_upper, y_test_upper, 'upper'
-    )
-    
-    print("\n" + "="*80 + "\n")
-    
-    lower_optimal, lower_results = analyze_model(
-        lower_model_path, X_test_lower, y_test_lower, 'lower'
-    )
-    
-    # 總結
-    print("\n" + "="*80)
-    print("[總結] 優化後的交易策略")
-    print("="*80)
-    print(f"\nShort 訊號 (上軌反彈):")
-    print(f"  閾值: {upper_optimal['threshold']:.3f}")
-    print(f"  勝率: {upper_optimal['precision']:.1%}")
-    print(f"  每日訊號: {upper_optimal['signals_per_day']:.1f} 次")
-    
-    print(f"\nLong 訊號 (下軌反彈):")
-    print(f"  閾值: {lower_optimal['threshold']:.3f}")
-    print(f"  勝率: {lower_optimal['precision']:.1%}")
-    print(f"  每日訊號: {lower_optimal['signals_per_day']:.1f} 次")
-    
-    total_signals = upper_optimal['signals_per_day'] + lower_optimal['signals_per_day']
-    avg_precision = (upper_optimal['precision'] + lower_optimal['precision']) / 2
-    
-    print(f"\n總計:")
-    print(f"  每日總訊號: {total_signals:.1f} 次")
-    print(f"  平均勝率: {avg_precision:.1%}")
-    print(f"\n建議: 使用優化後的 *_optimized.pkl 模型進行回測和實盤交易")
+    else:
+        print("錯誤: 沒有成功的測試")
