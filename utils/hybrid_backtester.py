@@ -47,11 +47,23 @@ class HybridBacktester:
         """
         logger.info(f"Loading XGBoost models...")
         
+        # 載入 Long 模型
         with open(xgb_long_path, 'rb') as f:
-            self.xgb_long = pickle.load(f)
+            loaded = pickle.load(f)
+            # 如果是 dict (v3 format),提取模型
+            if isinstance(loaded, dict):
+                self.xgb_long = loaded.get('model', loaded.get('calibrated_model'))
+            else:
+                self.xgb_long = loaded
         
+        # 載入 Short 模型
         with open(xgb_short_path, 'rb') as f:
-            self.xgb_short = pickle.load(f)
+            loaded = pickle.load(f)
+            # 如果是 dict (v3 format),提取模型
+            if isinstance(loaded, dict):
+                self.xgb_short = loaded.get('model', loaded.get('calibrated_model'))
+            else:
+                self.xgb_short = loaded
         
         logger.info("✅ XGBoost models loaded")
     
@@ -135,7 +147,7 @@ class HybridBacktester:
                 use_aggressive=True
             )
             
-            # 無持倉，檢查開倉
+            # 無持倉,檢查開倉
             if self.position is None:
                 if signal == 'LONG':
                     self._open_position(
@@ -148,7 +160,7 @@ class HybridBacktester:
                         chronos_short, xgb_short, reason
                     )
             
-            # 有持倉，檢查出倉
+            # 有持倉,檢查出倉
             else:
                 self._check_exit(bar, strategy)
         
