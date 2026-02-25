@@ -1,316 +1,325 @@
+"""
+Feature Engineering V3 - Optimized for High Win Rate
+
+Key Improvements:
+1. More aggressive label definitions (1.2% target vs 2%)
+2. Directional features (separate for long/short)
+3. Market regime features
+4. Probability-focused design
+
+Author: Zong
+Version: 3.0.0
+Date: 2026-02-25
+"""
+
 import pandas as pd
 import numpy as np
-from typing import Tuple, List
+from typing import Tuple, Optional
 import warnings
 warnings.filterwarnings('ignore')
 
 class FeatureEngineerV3:
     """
-    V3 特徵工程 - 簡潔但強大
+    V3 Feature Engineering - Optimized for practical trading
     
-    設計理念:
-    1. 精簡特徵 (20-25個)
-    2. 更好的標籤定義
-    3. 基於實際可獲利的價格移動
-    4. 更好的機率校準
+    Design Philosophy:
+    - Higher signal frequency (more trades)
+    - Better probability calibration
+    - Directional bias features
+    - Market regime awareness
     """
     
     def __init__(self):
-        self.version = 'v3'
-        self.feature_groups = {
-            'price': [],
-            'momentum': [],
-            'volatility': [],
-            'volume': [],
-            'microstructure': []
-        }
+        self.version = "3.0.0"
+        print(f"[V3 Feature Engineer] Initialized (v{self.version})")
     
     def create_features_from_1m(self, 
                                 df_1m: pd.DataFrame,
-                                tp_pct: float = 0.02,
-                                sl_pct: float = 0.01,
-                                label_type: str = 'both') -> pd.DataFrame:
+                                label_type: str = 'both',
+                                tp_target: float = 0.012,  # 1.2% target
+                                sl_stop: float = 0.008,    # 0.8% stop
+                                lookahead_bars: int = 240  # 4 hours
+                               ) -> pd.DataFrame:
         """
-        從 1m K線生成 V3 特徵
+        Generate V3 features and labels from 1m data
         
         Args:
-            df_1m: 1m K線數據
-            tp_pct: 停利百分比 (2%)
-            sl_pct: 停損百分比 (1%)
-            label_type: 'both', 'long', 'short'
+            df_1m: 1m OHLCV data
+            label_type: 'long', 'short', or 'both'
+            tp_target: Take profit target (1.2% default)
+            sl_stop: Stop loss (0.8% default)
+            lookahead_bars: Forward looking window (240 = 4h)
+        
+        Returns:
+            DataFrame with features and labels
         """
+        print(f"\n[V3] Creating features from {len(df_1m):,} 1m bars")
+        print(f"[V3] Label config: TP={tp_target*100:.1f}%, SL={sl_stop*100:.1f}%, Lookahead={lookahead_bars}")
+        
         df = df_1m.copy()
         
-        print("=" * 80)
-        print("V3 FEATURE ENGINEERING")
-        print("=" * 80)
-        print(f"Input data: {len(df):,} rows")
-        print(f"TP/SL: {tp_pct*100:.1f}% / {sl_pct*100:.1f}%")
+        # ========================================
+        # 1. Core Price Features
+        # ========================================
+        print("[V3] Computing core price features...")
         
-        # 1. 基礎價格特徵
-        df = self._add_price_features(df)
-        
-        # 2. 動能特徵
-        df = self._add_momentum_features(df)
-        
-        # 3. 波動率特徵
-        df = self._add_volatility_features(df)
-        
-        # 4. 成交量特徵
-        df = self._add_volume_features(df)
-        
-        # 5. 微觀結構特徵
-        df = self._add_microstructure_features(df)
-        
-        # 6. 多時間框架特徵
-        df = self._add_multi_timeframe_features(df)
-        
-        # 7. 生成標籤
-        if label_type in ['both', 'long']:
-            df = self._create_labels(df, 'long', tp_pct, sl_pct)
-        if label_type in ['both', 'short']:
-            df = self._create_labels(df, 'short', tp_pct, sl_pct)
-        
-        # 移除 NaN
-        df = df.dropna()
-        
-        print(f"\nOutput data: {len(df):,} rows")
-        print(f"Features: {len(self.get_feature_list())}")
-        print("=" * 80)
-        
-        return df
-    
-    def _add_price_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """基礎價格特徵"""
-        print("\n1. Adding Price Features...")
-        
-        # 價格變化
-        df['returns_1m'] = df['close'].pct_change()
+        # Price momentum (multiple timeframes)
         df['returns_5m'] = df['close'].pct_change(5)
         df['returns_15m'] = df['close'].pct_change(15)
+        df['returns_30m'] = df['close'].pct_change(30)
+        df['returns_1h'] = df['close'].pct_change(60)
         
-        # 價格位置 (relative to recent range)
-        high_60 = df['high'].rolling(60).max()
-        low_60 = df['low'].rolling(60).min()
-        df['price_position'] = (df['close'] - low_60) / (high_60 - low_60 + 1e-8)
+        # Price position (where are we in recent range?)
+        df['price_position_1h'] = (df['close'] - df['close'].rolling(60).min()) / \
+                                  (df['close'].rolling(60).max() - df['close'].rolling(60).min())
+        df['price_position_4h'] = (df['close'] - df['close'].rolling(240).min()) / \
+                                  (df['close'].rolling(240).max() - df['close'].rolling(240).min())
         
-        self.feature_groups['price'] = ['returns_1m', 'returns_5m', 'returns_15m', 'price_position']
-        return df
-    
-    def _add_momentum_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """動能特徵"""
-        print("2. Adding Momentum Features...")
+        # ========================================
+        # 2. Volatility Features
+        # ========================================
+        print("[V3] Computing volatility features...")
+        
+        # ATR (multiple periods)
+        df['high_low'] = df['high'] - df['low']
+        df['atr_14'] = df['high_low'].rolling(14).mean()
+        df['atr_60'] = df['high_low'].rolling(60).mean()
+        df['atr_pct_14'] = df['atr_14'] / df['close']
+        df['atr_pct_60'] = df['atr_60'] / df['close']
+        
+        # Volatility regime
+        df['vol_ratio'] = df['atr_pct_14'] / df['atr_pct_60'].replace(0, np.nan)
+        df['vol_expanding'] = (df['vol_ratio'] > 1.2).astype(int)  # High vol regime
+        
+        # ========================================
+        # 3. Trend Features
+        # ========================================
+        print("[V3] Computing trend features...")
+        
+        # EMAs
+        df['ema_9'] = df['close'].ewm(span=9).mean()
+        df['ema_21'] = df['close'].ewm(span=21).mean()
+        df['ema_50'] = df['close'].ewm(span=50).mean()
+        
+        # Trend strength
+        df['trend_9_21'] = (df['ema_9'] - df['ema_21']) / df['close']
+        df['trend_21_50'] = (df['ema_21'] - df['ema_50']) / df['close']
+        
+        # Price vs EMAs
+        df['above_ema9'] = (df['close'] > df['ema_9']).astype(int)
+        df['above_ema21'] = (df['close'] > df['ema_21']).astype(int)
+        df['above_ema50'] = (df['close'] > df['ema_50']).astype(int)
+        
+        # ========================================
+        # 4. Volume Features
+        # ========================================
+        print("[V3] Computing volume features...")
+        
+        # Volume ratios
+        df['volume_ma20'] = df['volume'].rolling(20).mean()
+        df['volume_ratio'] = df['volume'] / df['volume_ma20'].replace(0, np.nan)
+        
+        # Volume trend
+        df['volume_trend'] = df['volume'].rolling(10).mean() / \
+                            df['volume'].rolling(30).mean().replace(0, np.nan)
+        
+        # High volume bars
+        df['high_volume'] = (df['volume_ratio'] > 1.5).astype(int)
+        
+        # ========================================
+        # 5. Microstructure Features
+        # ========================================
+        print("[V3] Computing microstructure features...")
+        
+        # Candle patterns
+        df['body'] = abs(df['close'] - df['open'])
+        df['upper_shadow'] = df['high'] - df[['open', 'close']].max(axis=1)
+        df['lower_shadow'] = df[['open', 'close']].min(axis=1) - df['low']
+        df['body_pct'] = df['body'] / df['high_low'].replace(0, np.nan)
+        
+        # Bullish/Bearish candles
+        df['bullish_candle'] = (df['close'] > df['open']).astype(int)
+        df['bearish_candle'] = (df['close'] < df['open']).astype(int)
+        
+        # ========================================
+        # 6. Directional Pressure Features
+        # ========================================
+        print("[V3] Computing directional pressure...")
+        
+        # Buying/Selling pressure (last 30 mins)
+        df['bullish_bars_30m'] = df['bullish_candle'].rolling(30).sum()
+        df['bearish_bars_30m'] = df['bearish_candle'].rolling(30).sum()
+        df['pressure_ratio_30m'] = df['bullish_bars_30m'] / (df['bearish_bars_30m'] + 1)
+        
+        # Recent momentum direction
+        df['green_streak'] = (df['close'] > df['open']).astype(int)
+        df['green_streak'] = df['green_streak'].groupby(
+            (df['green_streak'] != df['green_streak'].shift()).cumsum()
+        ).cumsum()
+        
+        # ========================================
+        # 7. RSI and Oscillators
+        # ========================================
+        print("[V3] Computing oscillators...")
         
         # RSI
-        df['rsi_14'] = self._calculate_rsi(df['close'], 14)
-        df['rsi_28'] = self._calculate_rsi(df['close'], 28)
+        delta = df['close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss.replace(0, np.nan)
+        df['rsi_14'] = 100 - (100 / (1 + rs))
         
-        # MACD
-        ema_12 = df['close'].ewm(span=12).mean()
-        ema_26 = df['close'].ewm(span=26).mean()
-        df['macd'] = (ema_12 - ema_26) / df['close']
+        # RSI zones
+        df['rsi_oversold'] = (df['rsi_14'] < 35).astype(int)
+        df['rsi_overbought'] = (df['rsi_14'] > 65).astype(int)
         
-        # 動能強度 (price momentum over different periods)
-        df['momentum_5'] = (df['close'] / df['close'].shift(5) - 1)
-        df['momentum_15'] = (df['close'] / df['close'].shift(15) - 1)
-        df['momentum_30'] = (df['close'] / df['close'].shift(30) - 1)
+        # ========================================
+        # 8. Market Regime Features
+        # ========================================
+        print("[V3] Computing market regime...")
         
-        self.feature_groups['momentum'] = ['rsi_14', 'rsi_28', 'macd', 'momentum_5', 'momentum_15', 'momentum_30']
+        # Hourly aggregates
+        df['hour'] = df.index.hour
+        df['is_asian'] = df['hour'].between(0, 8).astype(int)
+        df['is_london'] = df['hour'].between(8, 16).astype(int)
+        df['is_nyc'] = df['hour'].between(13, 21).astype(int)
+        
+        # ========================================
+        # 9. Labels (V3 - More Aggressive)
+        # ========================================
+        print("[V3] Generating labels...")
+        
+        if label_type in ['long', 'both']:
+            df['label_long'] = self._create_label_long_v3(
+                df, tp_target, sl_stop, lookahead_bars
+            )
+        
+        if label_type in ['short', 'both']:
+            df['label_short'] = self._create_label_short_v3(
+                df, tp_target, sl_stop, lookahead_bars
+            )
+        
+        # ========================================
+        # 10. Clean and Fill
+        # ========================================
+        df = df.replace([np.inf, -np.inf], np.nan)
+        df = df.fillna(method='ffill').fillna(0)
+        
+        # Statistics
+        if label_type in ['long', 'both']:
+            long_rate = (df['label_long'] == 1).sum() / len(df) * 100
+            print(f"[V3] Long signals: {(df['label_long']==1).sum():,} ({long_rate:.2f}%)")
+        
+        if label_type in ['short', 'both']:
+            short_rate = (df['label_short'] == 1).sum() / len(df) * 100
+            print(f"[V3] Short signals: {(df['label_short']==1).sum():,} ({short_rate:.2f}%)")
+        
+        print(f"[V3] Features created: {len(df.columns)} columns")
         return df
     
-    def _add_volatility_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """波動率特徵"""
-        print("3. Adding Volatility Features...")
-        
-        # ATR
-        df['atr_14'] = self._calculate_atr(df, 14)
-        df['atr_pct'] = df['atr_14'] / df['close']
-        
-        # Bollinger Bands
-        sma_20 = df['close'].rolling(20).mean()
-        std_20 = df['close'].rolling(20).std()
-        df['bb_width'] = (std_20 * 2) / sma_20
-        df['bb_position'] = (df['close'] - sma_20) / (std_20 * 2 + 1e-8)
-        
-        # 波動率越勢 (volatility regime)
-        df['volatility_ratio'] = df['atr_pct'] / df['atr_pct'].rolling(60).mean()
-        
-        self.feature_groups['volatility'] = ['atr_pct', 'bb_width', 'bb_position', 'volatility_ratio']
-        return df
-    
-    def _add_volume_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """成交量特徵"""
-        print("4. Adding Volume Features...")
-        
-        # 成交量比率
-        df['volume_ratio'] = df['volume'] / df['volume'].rolling(20).mean()
-        
-        # 價量相關
-        df['price_volume_corr'] = df['close'].rolling(20).corr(df['volume'])
-        
-        # VWAP 偏離
-        typical_price = (df['high'] + df['low'] + df['close']) / 3
-        df['vwap'] = (typical_price * df['volume']).rolling(20).sum() / df['volume'].rolling(20).sum()
-        df['vwap_deviation'] = (df['close'] - df['vwap']) / df['vwap']
-        
-        self.feature_groups['volume'] = ['volume_ratio', 'price_volume_corr', 'vwap_deviation']
-        return df
-    
-    def _add_microstructure_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """微觀結構特徵"""
-        print("5. Adding Microstructure Features...")
-        
-        # 價格效率 (price efficiency)
-        price_change = abs(df['close'] - df['close'].shift(10))
-        path_length = abs(df['close'].diff()).rolling(10).sum()
-        df['efficiency_ratio'] = price_change / (path_length + 1e-8)
-        
-        # 極端價格時間 (time since extreme)
-        high_10 = df['high'].rolling(10).max()
-        low_10 = df['low'].rolling(10).min()
-        df['time_since_high'] = (df['high'] == high_10).rolling(10).apply(lambda x: 10 - np.argmax(x[::-1]) if x.any() else 10, raw=True)
-        df['time_since_low'] = (df['low'] == low_10).rolling(10).apply(lambda x: 10 - np.argmax(x[::-1]) if x.any() else 10, raw=True)
-        
-        self.feature_groups['microstructure'] = ['efficiency_ratio', 'time_since_high', 'time_since_low']
-        return df
-    
-    def _add_multi_timeframe_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """多時間框架特徵"""
-        print("6. Adding Multi-Timeframe Features...")
-        
-        # 5m 特徵
-        df_5m = df.resample('5min').agg({
-            'open': 'first',
-            'high': 'max',
-            'low': 'min',
-            'close': 'last',
-            'volume': 'sum'
-        }).dropna()
-        df_5m['rsi_5m'] = self._calculate_rsi(df_5m['close'], 14)
-        df_5m['atr_5m'] = self._calculate_atr(df_5m, 14) / df_5m['close']
-        
-        # 15m 特徵
-        df_15m = df.resample('15min').agg({
-            'open': 'first',
-            'high': 'max',
-            'low': 'min',
-            'close': 'last',
-            'volume': 'sum'
-        }).dropna()
-        df_15m['momentum_15m'] = df_15m['close'].pct_change(4)
-        
-        # 合併回 1m
-        df = df.join(df_5m[['rsi_5m', 'atr_5m']], how='left')
-        df = df.join(df_15m[['momentum_15m']], how='left')
-        
-        # Forward fill
-        df['rsi_5m'] = df['rsi_5m'].fillna(method='ffill')
-        df['atr_5m'] = df['atr_5m'].fillna(method='ffill')
-        df['momentum_15m'] = df['momentum_15m'].fillna(method='ffill')
-        
-        return df
-    
-    def _create_labels(self, df: pd.DataFrame, direction: str, tp_pct: float, sl_pct: float) -> pd.DataFrame:
+    def _create_label_long_v3(self, df: pd.DataFrame, tp: float, sl: float, 
+                              lookahead: int) -> pd.Series:
         """
-        生成標籤 - 基於實際 TP/SL
+        V3 Long Label: More aggressive, higher hit rate
         
-        標籤定義:
-        1 = 能在 TP 之前達到目標 (profitable)
-        0 = 在 SL 之前被停損 (unprofitable)
+        Criteria:
+        - Hit TP (1.2%) before SL (0.8%) within lookahead
+        - OR price > entry + 0.8% at bar 120 (2h) and never hit SL
         """
-        print(f"\n7. Creating {direction.upper()} labels (TP={tp_pct*100:.1f}%, SL={sl_pct*100:.1f}%)...")
+        labels = pd.Series(0, index=df.index)
         
-        labels = []
-        lookforward = 120  # 2小時
-        
-        for i in range(len(df) - lookforward):
+        for i in range(len(df) - lookahead):
             entry_price = df['close'].iloc[i]
-            future_prices = df['close'].iloc[i+1:i+lookforward+1]
-            future_highs = df['high'].iloc[i+1:i+lookforward+1]
-            future_lows = df['low'].iloc[i+1:i+lookforward+1]
+            tp_price = entry_price * (1 + tp)
+            sl_price = entry_price * (1 - sl)
             
-            if direction == 'long':
-                tp_price = entry_price * (1 + tp_pct)
-                sl_price = entry_price * (1 - sl_pct)
-                
-                # 檢查是否先達到 TP
-                tp_hit = (future_highs >= tp_price).any()
-                sl_hit = (future_lows <= sl_price).any()
-                
-                if tp_hit:
-                    tp_time = (future_highs >= tp_price).idxmax()
-                    if sl_hit:
-                        sl_time = (future_lows <= sl_price).idxmax()
-                        label = 1 if tp_time < sl_time else 0
-                    else:
-                        label = 1
-                else:
-                    label = 0
+            future_high = df['high'].iloc[i+1:i+1+lookahead]
+            future_low = df['low'].iloc[i+1:i+1+lookahead]
             
-            else:  # short
-                tp_price = entry_price * (1 - tp_pct)
-                sl_price = entry_price * (1 + sl_pct)
-                
-                # 檢查是否先達到 TP
-                tp_hit = (future_lows <= tp_price).any()
-                sl_hit = (future_highs >= sl_price).any()
-                
-                if tp_hit:
-                    tp_time = (future_lows <= tp_price).idxmax()
-                    if sl_hit:
-                        sl_time = (future_highs >= sl_price).idxmax()
-                        label = 1 if tp_time < sl_time else 0
-                    else:
-                        label = 1
-                else:
-                    label = 0
+            # Check if hit TP before SL
+            hit_tp_idx = np.where(future_high >= tp_price)[0]
+            hit_sl_idx = np.where(future_low <= sl_price)[0]
             
-            labels.append(label)
+            if len(hit_tp_idx) > 0:
+                if len(hit_sl_idx) == 0 or hit_tp_idx[0] < hit_sl_idx[0]:
+                    labels.iloc[i] = 1
+            # Additional: Partial profit condition
+            elif len(hit_sl_idx) == 0:
+                # If never hit SL and up 0.8% at 2h mark
+                if len(future_high) >= 120:
+                    if future_high.iloc[119] >= entry_price * 1.008:
+                        labels.iloc[i] = 1
         
-        # 加入 NaN 以匹配長度
-        labels.extend([np.nan] * lookforward)
-        df[f'label_{direction}'] = labels
-        
-        # 統計
-        valid_labels = [l for l in labels if not np.isnan(l)]
-        if valid_labels:
-            positive_rate = sum(valid_labels) / len(valid_labels) * 100
-            print(f"  Positive rate: {positive_rate:.2f}%")
-            print(f"  Total labels: {len(valid_labels):,}")
-        
-        return df
+        return labels
     
-    def _calculate_rsi(self, series: pd.Series, period: int = 14) -> pd.Series:
-        """計算 RSI"""
-        delta = series.diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-        rs = gain / (loss + 1e-8)
-        rsi = 100 - (100 / (1 + rs))
-        return rsi
-    
-    def _calculate_atr(self, df: pd.DataFrame, period: int = 14) -> pd.Series:
-        """計算 ATR"""
-        high_low = df['high'] - df['low']
-        high_close = abs(df['high'] - df['close'].shift())
-        low_close = abs(df['low'] - df['close'].shift())
-        tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-        atr = tr.rolling(window=period).mean()
-        return atr
-    
-    def get_feature_list(self) -> List[str]:
-        """獲取所有特徵名稱"""
-        features = []
-        for group in self.feature_groups.values():
-            features.extend(group)
+    def _create_label_short_v3(self, df: pd.DataFrame, tp: float, sl: float,
+                               lookahead: int) -> pd.Series:
+        """
+        V3 Short Label: More aggressive, higher hit rate
         
-        # 加入多時間框架特徵
-        features.extend(['rsi_5m', 'atr_5m', 'momentum_15m'])
+        Criteria:
+        - Hit TP (1.2%) before SL (0.8%) within lookahead
+        - OR price < entry - 0.8% at bar 120 (2h) and never hit SL
+        """
+        labels = pd.Series(0, index=df.index)
+        
+        for i in range(len(df) - lookahead):
+            entry_price = df['close'].iloc[i]
+            tp_price = entry_price * (1 - tp)
+            sl_price = entry_price * (1 + sl)
+            
+            future_high = df['high'].iloc[i+1:i+1+lookahead]
+            future_low = df['low'].iloc[i+1:i+1+lookahead]
+            
+            # Check if hit TP before SL
+            hit_tp_idx = np.where(future_low <= tp_price)[0]
+            hit_sl_idx = np.where(future_high >= sl_price)[0]
+            
+            if len(hit_tp_idx) > 0:
+                if len(hit_sl_idx) == 0 or hit_tp_idx[0] < hit_sl_idx[0]:
+                    labels.iloc[i] = 1
+            # Additional: Partial profit condition
+            elif len(hit_sl_idx) == 0:
+                # If never hit SL and down 0.8% at 2h mark
+                if len(future_low) >= 120:
+                    if future_low.iloc[119] <= entry_price * 0.992:
+                        labels.iloc[i] = 1
+        
+        return labels
+    
+    def get_feature_list(self) -> list:
+        """
+        Return list of V3 features (excluding labels)
+        """
+        features = [
+            # Price momentum
+            'returns_5m', 'returns_15m', 'returns_30m', 'returns_1h',
+            'price_position_1h', 'price_position_4h',
+            
+            # Volatility
+            'atr_pct_14', 'atr_pct_60', 'vol_ratio', 'vol_expanding',
+            
+            # Trend
+            'trend_9_21', 'trend_21_50',
+            'above_ema9', 'above_ema21', 'above_ema50',
+            
+            # Volume
+            'volume_ratio', 'volume_trend', 'high_volume',
+            
+            # Microstructure
+            'body_pct', 'bullish_candle', 'bearish_candle',
+            
+            # Directional pressure
+            'pressure_ratio_30m', 'green_streak',
+            
+            # Oscillators
+            'rsi_14', 'rsi_oversold', 'rsi_overbought',
+            
+            # Market regime
+            'is_asian', 'is_london', 'is_nyc'
+        ]
         
         return features
     
-    def get_feature_groups(self) -> dict:
-        """獲取特徵分組"""
-        groups = self.feature_groups.copy()
-        groups['multi_timeframe'] = ['rsi_5m', 'atr_5m', 'momentum_15m']
-        return groups
+    def get_version(self) -> str:
+        return self.version
