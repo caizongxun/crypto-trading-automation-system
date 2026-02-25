@@ -16,7 +16,7 @@ class BacktestAnalyzer:
     """
     完整的回測診斷分析工具
     
-    **核心功能**:
+    核心功能:
     - 特徵重要性分析
     - 時段績效分解
     - 機率分層測試
@@ -138,7 +138,7 @@ class BacktestAnalyzer:
         hour_trades = self.trades_df[self.trades_df['entry_hour'] == hour]
         wins = hour_trades[hour_trades['pnl_net'] > 0]['pnl_net'].sum()
         losses = abs(hour_trades[hour_trades['pnl_net'] <= 0]['pnl_net'].sum())
-        return wins / losses if losses > 0 else np.inf
+        return wins / losses if losses > 0 else (np.inf if wins > 0 else 1.0)
     
     def analyze_probability_layers(self) -> pd.DataFrame:
         """
@@ -186,17 +186,32 @@ class BacktestAnalyzer:
         
         def calc_metrics(df):
             if len(df) == 0:
-                return {'count': 0, 'win_rate': 0, 'pnl': 0, 'pf': 0}
+                return {
+                    'count': 0,
+                    'win_rate': 0.0,
+                    'total_pnl': 0.0,
+                    'avg_pnl': 0.0,
+                    'profit_factor': 0.0
+                }
             
             wins = df[df['pnl_net'] > 0]
             losses = df[df['pnl_net'] <= 0]
+            
+            total_wins = wins['pnl_net'].sum() if len(wins) > 0 else 0
+            total_losses = abs(losses['pnl_net'].sum()) if len(losses) > 0 else 0
+            
+            # FIXED: Handle case when no losses
+            if total_losses == 0:
+                pf = np.inf if total_wins > 0 else 0.0
+            else:
+                pf = total_wins / total_losses
             
             return {
                 'count': len(df),
                 'win_rate': len(wins) / len(df),
                 'total_pnl': df['pnl_net'].sum(),
                 'avg_pnl': df['pnl_net'].mean(),
-                'profit_factor': abs(wins['pnl_net'].sum() / losses['pnl_net'].sum()) if len(losses) > 0 else np.inf
+                'profit_factor': pf
             }
         
         comparison = {
@@ -301,7 +316,7 @@ class BacktestAnalyzer:
         # 1. 統計顯著性檢查
         if basic.get('total_trades', 0) < 30:
             recommendations.append(
-                "⚠️ CRITICAL: 樣本數不足 (<30). 降低閾值到 0.14-0.15 以增加交易數量"
+                "CRITICAL: 樣本數不足 (<30). 降低閾值到 0.12-0.14 以增加交易數量"
             )
         
         # 2. 時段優化
@@ -309,7 +324,7 @@ class BacktestAnalyzer:
             best_hours = hourly.nlargest(3, 'profit_factor').index.tolist()
             worst_hours = hourly.nsmallest(3, 'profit_factor').index.tolist()
             recommendations.append(
-                f"⏰ 專注最佳時段: {best_hours} UTC, 避開: {worst_hours} UTC"
+                f"專注最佳時段: {best_hours} UTC, 避開: {worst_hours} UTC"
             )
         
         # 3. 機率分層建議
@@ -317,7 +332,7 @@ class BacktestAnalyzer:
             sweet_spot = layers.loc['0.18-0.22']
             if sweet_spot['win_rate'] > 0.40:
                 recommendations.append(
-                    f"🎯 甜蜜點: 0.18-0.22 區間表現優異 (勝率 {sweet_spot['win_rate']*100:.1f}%). 考慮提高閾值到 0.18"
+                    f"甜蜜點: 0.18-0.22 區間表現優異 (勝率 {sweet_spot['win_rate']*100:.1f}%). 考慮提高閾值到 0.18"
                 )
         
         # 4. 方向偏差
@@ -325,21 +340,31 @@ class BacktestAnalyzer:
             long_pf = direction.get('long', {}).get('profit_factor', 0)
             short_pf = direction.get('short', {}).get('profit_factor', 0)
             
-            if abs(long_pf - short_pf) > 0.5:
+            # Handle inf values
+            if np.isinf(long_pf) or np.isinf(short_pf):
+                if np.isinf(long_pf) and not np.isinf(short_pf):
+                    recommendations.append(
+                        "LONG 表現完美 (無虧損交易). SHORT 可能需要調整閾值或暫停"
+                    )
+                elif np.isinf(short_pf) and not np.isinf(long_pf):
+                    recommendations.append(
+                        "SHORT 表現完美 (無虧損交易). LONG 可能需要調整閾值或暫停"
+                    )
+            elif abs(long_pf - short_pf) > 0.5:
                 better = 'LONG' if long_pf > short_pf else 'SHORT'
                 recommendations.append(
-                    f"📊 方向偏差明顯: {better} 表現更好 (PF差距 {abs(long_pf - short_pf):.2f}). 考慮單向策略或調整互斥閾值"
+                    f"方向偏差明顯: {better} 表現更好 (PF差距 {abs(long_pf - short_pf):.2f}). 考慮單向策略或調整閾值"
                 )
         
         # 5. 勝率建議
         win_rate = basic.get('win_rate', 0)
         if win_rate < 0.33:
             recommendations.append(
-                "📉 勝率偏低 (<33%). 建議: 1) 提高閾值到 0.18+, 或 2) 壓縮 TP 到 1.5%"
+                "勝率偏低 (<33%). 建議: 1) 提高閾值到 0.16+, 或 2) 壓縮 TP 到 1.5%"
             )
         elif win_rate > 0.40:
             recommendations.append(
-                "📈 勝率優異 (>40%). 可嘗試拉高 TP 到 2.5% 以提升盈虧比"
+                "勝率優異 (>40%). 可嘗試拉高 TP 到 2.0-2.5% 以提升盈虧比"
             )
         
         logger.info("="*80)
@@ -394,10 +419,19 @@ class BacktestAnalyzer:
         # 3. Long vs Short
         direction = results['direction_comparison']
         if direction:
+            long_pf = direction['long']['profit_factor']
+            short_pf = direction['short']['profit_factor']
+            
+            # Cap inf values for display
+            if np.isinf(long_pf):
+                long_pf = 10.0
+            if np.isinf(short_pf):
+                short_pf = 10.0
+            
             fig.add_trace(
                 go.Bar(
                     x=['Long', 'Short'],
-                    y=[direction['long']['profit_factor'], direction['short']['profit_factor']],
+                    y=[long_pf, short_pf],
                     name='Profit Factor'
                 ),
                 row=2, col=1
@@ -418,4 +452,4 @@ class BacktestAnalyzer:
         fig.update_layout(height=1200, showlegend=False, title_text="Backtest Diagnostic Report")
         fig.write_html(output_path)
         
-        logger.info(f"✅ HTML report saved: {output_path}")
+        logger.info(f"HTML report saved: {output_path}")
