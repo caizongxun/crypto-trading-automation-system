@@ -74,7 +74,8 @@ def run_chronos_backtest(
     chronos_params: Dict[str, Any],
     tp_pct: float,
     sl_pct: float,
-    prob_threshold: float = 0.15
+    prob_threshold: float = 0.15,
+    progress_callback=None
 ) -> Dict[str, Any]:
     """
     執行 Chronos 模型回測
@@ -88,16 +89,21 @@ def run_chronos_backtest(
         tp_pct: 止盈百分比
         sl_pct: 止損百分比
         prob_threshold: 機率門檻
+        progress_callback: 進度回調函數
     
     Returns:
         回測結果字典
     """
+    def update_progress(msg):
+        if progress_callback:
+            progress_callback(msg)
+        logger.info(msg)
+    
     try:
-        from models.chronos_predictor import ChronosPredictor
+        # Step 1: 載入資料
+        update_progress(f"步驟 1/4: 載入 {symbol} {timeframe} 資料...")
         from utils.hf_data_loader import load_klines
         
-        # 載入資料
-        logger.info(f"Loading {symbol} {timeframe} data...")
         df = load_klines(symbol, timeframe, start_date, end_date)
         
         if len(df) == 0:
@@ -106,15 +112,25 @@ def run_chronos_backtest(
                 'error': '無法載入資料'
             }
         
-        # 初始化預測器
-        logger.info(f"Initializing Chronos {chronos_params['model_size']} model...")
+        update_progress(f"✅ 載入 {len(df)} 筆 K 線")
+        
+        # Step 2: 初始化預測器
+        update_progress(f"\n步驟 2/4: 初始化 Chronos {chronos_params['model_size']} 模型...")
+        update_progress("⚠️ 首次使用會下載模型檔案 (~33MB)，請稍候...")
+        
+        from models.chronos_predictor import ChronosPredictor
+        
         predictor = ChronosPredictor(
             model_name=f"amazon/chronos-t5-{chronos_params['model_size']}",
-            device="cpu"  # GUI 環境先用 CPU
+            device="cpu"
         )
         
-        # 批次預測
-        logger.info("Running batch predictions...")
+        update_progress("✅ 模型載入完成")
+        
+        # Step 3: 批次預測
+        update_progress(f"\n步驟 3/4: 執行批次預測...")
+        update_progress(f"預測數量: {len(df) - chronos_params['lookback']} 筆")
+        
         df_pred = predictor.predict_batch(
             df=df,
             lookback=chronos_params['lookback'],
@@ -124,7 +140,11 @@ def run_chronos_backtest(
             sl_pct=sl_pct
         )
         
-        # 簡易回測邏輯
+        update_progress("✅ 預測完成")
+        
+        # Step 4: 回測模擬
+        update_progress(f"\n步驟 4/4: 執行回測模擬...")
+        
         trades = []
         capital = 10000
         position = None
@@ -213,6 +233,9 @@ def run_chronos_backtest(
         win_rate = wins / total_trades * 100 if total_trades > 0 else 0
         
         total_return = (capital - 10000) / 10000 * 100
+        
+        update_progress(f"\n✅ 回測完成!")
+        update_progress(f"總交易: {total_trades}, 勝率: {win_rate:.1f}%, 報酬: {total_return:+.2f}%")
         
         return {
             'success': True,
