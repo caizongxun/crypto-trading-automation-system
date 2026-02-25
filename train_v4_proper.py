@@ -15,7 +15,7 @@ import numpy as np
 from pathlib import Path
 import logging
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import pickle
 from catboost import CatBoostClassifier, Pool
@@ -89,10 +89,10 @@ def calculate_better_features(df: pd.DataFrame) -> pd.DataFrame:
     features['direction_ma6'] = direction.rolling(6).mean()
     
     # 5. Time features (2個)
-    if isinstance(df.index, pd.DatetimeIndex):
-        hour = df.index.hour
-    elif 'open_time' in df.columns:
+    if 'open_time' in df.columns:
         hour = pd.to_datetime(df['open_time']).dt.hour
+    elif isinstance(df.index, pd.DatetimeIndex):
+        hour = df.index.hour
     else:
         hour = pd.Series(12, index=df.index)
     
@@ -154,8 +154,18 @@ def train_v4_model(
     
     # 1. 載入數據
     logger.info("Step 1/6: Loading data...")
-    from utils.hf_data_loader import load_data_from_hf
-    df = load_data_from_hf(symbol, timeframe, days=days)
+    from utils.hf_data_loader import load_klines
+    
+    # 計算開始日期
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=days)
+    
+    df = load_klines(
+        symbol=symbol,
+        timeframe=timeframe,
+        start_date=start_date.strftime('%Y-%m-%d'),
+        end_date=end_date.strftime('%Y-%m-%d')
+    )
     logger.info(f"Loaded {len(df)} candles")
     
     # 2. 計算特徵
