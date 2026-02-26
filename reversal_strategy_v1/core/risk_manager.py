@@ -1,1 +1,86 @@
-"""\nRisk Manager\n風險管理和倉位計算\n"""\nimport numpy as np\nimport pandas as pd\nfrom typing import Dict, Optional\n\nclass RiskManager:\n    def __init__(self, config: dict):\n        self.initial_capital = config.get('initial_capital', 10)\n        self.max_risk_per_trade = config.get('max_risk_per_trade', 0.02)\n        self.max_leverage = config.get('max_leverage', 10)\n        self.default_leverage = config.get('default_leverage', 3)\n        self.atr_multiplier_sl = config.get('atr_multiplier_sl', 1.5)\n        self.atr_multiplier_tp = config.get('atr_multiplier_tp', 3.0)\n        \n    def calculate_position_size(self, \n                                capital: float,\n                                entry_price: float, \n                                stop_loss: float,\n                                leverage: int = None) -> Dict:\n        \"\"\"\u8a08\u7b97\u5009\u4f4d\u5927\u5c0f\"\"\"\n        if leverage is None:\n            leverage = self.default_leverage\n        \n        leverage = min(leverage, self.max_leverage)\n        risk_amount = capital * self.max_risk_per_trade\n        stop_loss_pct = abs(entry_price - stop_loss) / entry_price\n        \n        position_size = (risk_amount / stop_loss_pct) / entry_price\n        max_position_size = (capital * leverage) / entry_price\n        position_size = min(position_size, max_position_size)\n        \n        actual_risk = position_size * entry_price * stop_loss_pct\n        margin_required = (position_size * entry_price) / leverage\n        \n        return {\n            'position_size': position_size,\n            'leverage': leverage,\n            'margin_required': margin_required,\n            'risk_amount': actual_risk,\n            'risk_percentage': (actual_risk / capital) * 100,\n            'stop_loss_pct': stop_loss_pct * 100\n        }\n    \n    def calculate_stop_loss_take_profit(self,\n                                       df: pd.DataFrame,\n                                       direction: str,\n                                       atr_period: int = 14) -> Dict:\n        \"\"\"\u57fa\u65bcATR\u8a08\u7b97\u6b62\u640d\u548c\u6b62\u76c8\"\"\"\n        high_low = df['high'] - df['low']\n        high_close = abs(df['high'] - df['close'].shift(1))\n        low_close = abs(df['low'] - df['close'].shift(1))\n        \n        tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)\n        atr = tr.rolling(atr_period).mean().iloc[-1]\n        \n        current_price = df['close'].iloc[-1]\n        \n        if direction == 'LONG':\n            stop_loss = current_price - (atr * self.atr_multiplier_sl)\n            take_profit = current_price + (atr * self.atr_multiplier_tp)\n        else:\n            stop_loss = current_price + (atr * self.atr_multiplier_sl)\n            take_profit = current_price - (atr * self.atr_multiplier_tp)\n        \n        return {\n            'stop_loss': stop_loss,\n            'take_profit': take_profit,\n            'atr': atr,\n            'risk_reward_ratio': self.atr_multiplier_tp / self.atr_multiplier_sl\n        }\n    \n    def check_risk_limits(self, \n                         current_capital: float,\n                         open_positions: int,\n                         max_positions: int = 3) -> Dict:\n        \"\"\"\u6aa2\u67e5\u662f\u5426\u53ef\u4ee5\u958b\u65b0\u5009\"\"\"\n        can_trade = True\n        reasons = []\n        \n        if current_capital < self.initial_capital * 0.5:\n            can_trade = False\n            reasons.append('\u8cc7\u91d1\u4f4e\u65bc\u521d\u59cb\u8cc7\u91d150%')\n        \n        if open_positions >= max_positions:\n            can_trade = False\n            reasons.append(f'\u5df2\u9054\u5230\u6700\u5927\u6301\u5009\u6578\u91cf {max_positions}')\n        \n        return {\n            'can_trade': can_trade,\n            'reasons': reasons\n        }\n    \n    def calculate_pnl(self,\n                     entry_price: float,\n                     exit_price: float,\n                     position_size: float,\n                     direction: str,\n                     leverage: int,\n                     fee_rate: float = 0.0004) -> Dict:\n        \"\"\"\u8a08\u7b97\u76c8\u8667\"\"\"\n        if direction == 'LONG':\n            price_change_pct = (exit_price - entry_price) / entry_price\n        else:\n            price_change_pct = (entry_price - exit_price) / entry_price\n        \n        gross_pnl = position_size * entry_price * price_change_pct * leverage\n        \n        entry_fee = position_size * entry_price * fee_rate\n        exit_fee = position_size * exit_price * fee_rate\n        total_fee = entry_fee + exit_fee\n        \n        net_pnl = gross_pnl - total_fee\n        margin = (position_size * entry_price) / leverage\n        roi = (net_pnl / margin) * 100 if margin > 0 else 0\n        \n        return {\n            'gross_pnl': gross_pnl,\n            'fees': total_fee,\n            'net_pnl': net_pnl,\n            'roi': roi,\n            'price_change_pct': price_change_pct * 100\n        }\n
+"""
+Risk Manager
+風險管理和倉位計算
+"""
+import pandas as pd
+import numpy as np
+from typing import Dict, Optional
+
+class RiskManager:
+    def __init__(self, config: dict):
+        self.initial_capital = config.get('initial_capital', 10)
+        self.max_risk_per_trade = config.get('max_risk_per_trade', 0.02)
+        self.max_leverage = config.get('max_leverage', 10)
+        self.default_leverage = config.get('default_leverage', 3)
+        self.atr_multiplier_sl = config.get('atr_multiplier_sl', 1.5)
+        self.atr_multiplier_tp = config.get('atr_multiplier_tp', 3.0)
+        
+    def calculate_position_size(self, capital: float, entry_price: float, 
+                               stop_loss: float, leverage: int = None) -> Dict:
+        """計算倉位大小"""
+        if leverage is None:
+            leverage = self.default_leverage
+        
+        leverage = min(leverage, self.max_leverage)
+        
+        risk_amount = capital * self.max_risk_per_trade
+        
+        price_risk = abs(entry_price - stop_loss) / entry_price
+        
+        if price_risk == 0:
+            position_value = capital * leverage
+        else:
+            position_value = risk_amount / price_risk
+            position_value = min(position_value, capital * leverage)
+        
+        position_size = position_value / entry_price
+        
+        return {
+            'position_size': position_size,
+            'position_value': position_value,
+            'leverage': leverage,
+            'risk_amount': risk_amount
+        }
+    
+    def calculate_stop_loss_take_profit(self, df: pd.DataFrame, 
+                                       direction: str) -> Dict:
+        """基於ATR計算止損和止盈"""
+        if len(df) < 14:
+            atr = (df['high'] - df['low']).mean()
+        else:
+            if 'atr_14' in df.columns:
+                atr = df['atr_14'].iloc[-1]
+            else:
+                high_low = df['high'] - df['low']
+                high_close = abs(df['high'] - df['close'].shift())
+                low_close = abs(df['low'] - df['close'].shift())
+                tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+                atr = tr.rolling(14).mean().iloc[-1]
+        
+        if pd.isna(atr) or atr == 0:
+            atr = df['close'].iloc[-1] * 0.01
+        
+        current_price = df['close'].iloc[-1]
+        
+        if direction == 'LONG':
+            stop_loss = current_price - (atr * self.atr_multiplier_sl)
+            take_profit = current_price + (atr * self.atr_multiplier_tp)
+        else:
+            stop_loss = current_price + (atr * self.atr_multiplier_sl)
+            take_profit = current_price - (atr * self.atr_multiplier_tp)
+        
+        return {
+            'stop_loss': stop_loss,
+            'take_profit': take_profit,
+            'atr': atr
+        }
+    
+    def check_risk_limits(self, current_positions: int, total_exposure: float, 
+                         capital: float) -> bool:
+        """檢查是否超過風險限制"""
+        max_exposure = capital * self.max_leverage
+        
+        if total_exposure >= max_exposure:
+            return False
+        
+        return True

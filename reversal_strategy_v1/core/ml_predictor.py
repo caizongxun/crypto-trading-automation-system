@@ -1,1 +1,156 @@
-"""\nML Predictor for Reversal Signal Validation\n使用機器學習模型驗證反轉信號的有效性\n"""\nimport pandas as pd\nimport numpy as np\nimport xgboost as xgb\nfrom sklearn.metrics import classification_report, confusion_matrix\nimport joblib\nimport json\nfrom pathlib import Path\nfrom typing import Dict, Tuple, Optional\n\nclass MLPredictor:\n    def __init__(self, config: dict):\n        self.config = config\n        self.model_long = None\n        self.model_short = None\n        self.feature_names = []\n        self.scaler_mean = None\n        self.scaler_std = None\n        \n    def train(self, df: pd.DataFrame, feature_cols: list, \n              test_size: float = 0.2, oos_size: float = 0.1) -> Dict:\n        \"\"\"\u8a13\u7df4\u6a21\u578b\uff0c\u5305\u542b\u8a13\u7df4\u96c6/\u9a57\u8b49\u96c6/OOS\u6e2c\u8a66\u96c6\u5283\u5206\"\"\"\n        self.feature_names = feature_cols\n        \n        df_clean = df[feature_cols + ['label', 'signal_long', 'signal_short']].dropna()\n        \n        train_val_size = 1 - oos_size\n        train_size = (1 - test_size) * train_val_size\n        \n        n = len(df_clean)\n        train_end = int(n * train_size)\n        val_end = int(n * train_val_size)\n        \n        train_data = df_clean.iloc[:train_end]\n        val_data = df_clean.iloc[train_end:val_end]\n        oos_data = df_clean.iloc[val_end:]\n        \n        print(f'\u8a13\u7df4\u96c6: {len(train_data)} | \u9a57\u8b49\u96c6: {len(val_data)} | OOS: {len(oos_data)}')\n        \n        X_train = train_data[feature_cols].values\n        self.scaler_mean = np.nanmean(X_train, axis=0)\n        self.scaler_std = np.nanstd(X_train, axis=0) + 1e-8\n        \n        X_train = (X_train - self.scaler_mean) / self.scaler_std\n        X_val = (val_data[feature_cols].values - self.scaler_mean) / self.scaler_std\n        X_oos = (oos_data[feature_cols].values - self.scaler_mean) / self.scaler_std\n        \n        y_train = train_data['label'].values\n        y_val = val_data['label'].values\n        y_oos = oos_data['label'].values\n        \n        print('\\n\u8a13\u7df4\u505a\u591a\u4fe1\u865f\u9a57\u8b49\u6a21\u578b...')\n        long_mask_train = train_data['signal_long'] == 1\n        long_mask_val = val_data['signal_long'] == 1\n        long_mask_oos = oos_data['signal_long'] == 1\n        \n        if long_mask_train.sum() > 100:\n            self.model_long = self._train_single_model(\n                X_train[long_mask_train], \n                (y_train[long_mask_train] == 1).astype(int),\n                X_val[long_mask_val],\n                (y_val[long_mask_val] == 1).astype(int),\n                'LONG'\n            )\n            \n            if long_mask_oos.sum() > 0:\n                y_pred_oos = self.model_long.predict(X_oos[long_mask_oos])\n                y_true_oos = (y_oos[long_mask_oos] == 1).astype(int)\n                print(f'\\nOOS\u505a\u591a\u4fe1\u865f\u6e96\u78ba\u7387: {(y_pred_oos == y_true_oos).mean():.3f}')\n                print(f'OOS\u505a\u591a\u4fe1\u865f\u6578\u91cf: {long_mask_oos.sum()}')\n        \n        print('\\n\u8a13\u7df4\u505a\u7a7a\u4fe1\u865f\u9a57\u8b49\u6a21\u578b...')\n        short_mask_train = train_data['signal_short'] == 1\n        short_mask_val = val_data['signal_short'] == 1\n        short_mask_oos = oos_data['signal_short'] == 1\n        \n        if short_mask_train.sum() > 100:\n            self.model_short = self._train_single_model(\n                X_train[short_mask_train],\n                (y_train[short_mask_train] == -1).astype(int),\n                X_val[short_mask_val],\n                (y_val[short_mask_val] == -1).astype(int),\n                'SHORT'\n            )\n            \n            if short_mask_oos.sum() > 0:\n                y_pred_oos = self.model_short.predict(X_oos[short_mask_oos])\n                y_true_oos = (y_oos[short_mask_oos] == -1).astype(int)\n                print(f'\\nOOS\u505a\u7a7a\u4fe1\u865f\u6e96\u78ba\u7387: {(y_pred_oos == y_true_oos).mean():.3f}')\n                print(f'OOS\u505a\u7a7a\u4fe1\u865f\u6578\u91cf: {short_mask_oos.sum()}')\n        \n        return {\n            'train_samples': len(train_data),\n            'val_samples': len(val_data),\n            'oos_samples': len(oos_data)\n        }\n    \n    def _train_single_model(self, X_train, y_train, X_val, y_val, model_type: str):\n        \"\"\"\u8a13\u7df4\u55aebXGBoost\u6a21\u578b\"\"\"\n        scale_pos_weight = (y_train == 0).sum() / max((y_train == 1).sum(), 1)\n        \n        model = xgb.XGBClassifier(\n            n_estimators=self.config.get('n_estimators', 200),\n            max_depth=self.config.get('max_depth', 5),\n            learning_rate=self.config.get('learning_rate', 0.05),\n            subsample=0.8,\n            colsample_bytree=0.8,\n            scale_pos_weight=scale_pos_weight,\n            random_state=42,\n            eval_metric='logloss'\n        )\n        \n        model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)\n        \n        y_pred_train = model.predict(X_train)\n        y_pred_val = model.predict(X_val)\n        \n        train_acc = (y_pred_train == y_train).mean()\n        val_acc = (y_pred_val == y_val).mean()\n        \n        print(f'{model_type} \u8a13\u7df4\u6e96\u78ba\u7387: {train_acc:.3f} | \u9a57\u8b49\u6e96\u78ba\u7387: {val_acc:.3f}')\n        \n        return model\n    \n    def predict(self, df: pd.DataFrame) -> pd.DataFrame:\n        \"\"\"\u9810\u6e2c\u4fe1\u865f\u6709\u6548\u6027\"\"\"\n        df = df.copy()\n        \n        if len(self.feature_names) == 0:\n            raise ValueError('\u6a21\u578b\u5c1a\u672a\u8a13\u7df4')\n        \n        X = df[self.feature_names].values\n        X = (X - self.scaler_mean) / self.scaler_std\n        \n        df['pred_long_valid'] = 0\n        df['pred_short_valid'] = 0\n        df['pred_long_proba'] = 0.0\n        df['pred_short_proba'] = 0.0\n        \n        if self.model_long is not None:\n            long_mask = df['signal_long'] == 1\n            if long_mask.sum() > 0:\n                df.loc[long_mask, 'pred_long_valid'] = self.model_long.predict(X[long_mask])\n                df.loc[long_mask, 'pred_long_proba'] = self.model_long.predict_proba(X[long_mask])[:, 1]\n        \n        if self.model_short is not None:\n            short_mask = df['signal_short'] == 1\n            if short_mask.sum() > 0:\n                df.loc[short_mask, 'pred_short_valid'] = self.model_short.predict(X[short_mask])\n                df.loc[short_mask, 'pred_short_proba'] = self.model_short.predict_proba(X[short_mask])[:, 1]\n        \n        return df\n    \n    def save(self, model_dir: Path):\n        \"\"\"\u4fdd\u5b58\u6a21\u578b\"\"\"\n        model_dir.mkdir(parents=True, exist_ok=True)\n        \n        if self.model_long is not None:\n            joblib.dump(self.model_long, model_dir / 'model_long.pkl')\n        \n        if self.model_short is not None:\n            joblib.dump(self.model_short, model_dir / 'model_short.pkl')\n        \n        metadata = {\n            'feature_names': self.feature_names,\n            'scaler_mean': self.scaler_mean.tolist() if self.scaler_mean is not None else None,\n            'scaler_std': self.scaler_std.tolist() if self.scaler_std is not None else None,\n            'config': self.config\n        }\n        \n        with open(model_dir / 'metadata.json', 'w') as f:\n            json.dump(metadata, f, indent=2)\n        \n        print(f'\u6a21\u578b\u5df2\u4fdd\u5b58\u81f3 {model_dir}')\n    \n    def load(self, model_dir: Path):\n        \"\"\"\u52a0\u8f09\u6a21\u578b\"\"\"\n        with open(model_dir / 'metadata.json', 'r') as f:\n            metadata = json.load(f)\n        \n        self.feature_names = metadata['feature_names']\n        self.scaler_mean = np.array(metadata['scaler_mean']) if metadata['scaler_mean'] else None\n        self.scaler_std = np.array(metadata['scaler_std']) if metadata['scaler_std'] else None\n        self.config = metadata['config']\n        \n        long_path = model_dir / 'model_long.pkl'\n        if long_path.exists():\n            self.model_long = joblib.load(long_path)\n        \n        short_path = model_dir / 'model_short.pkl'\n        if short_path.exists():\n            self.model_short = joblib.load(short_path)\n        \n        print(f'\u6a21\u578b\u5df2\u5f9e {model_dir} \u52a0\u8f09')\n
+"""
+ML Predictor using XGBoost
+使用XGBoost進行信號驗證
+"""
+import pandas as pd
+import numpy as np
+import xgboost as xgb
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from pathlib import Path
+import joblib
+import json
+from typing import Dict, Tuple, Optional
+
+class MLPredictor:
+    def __init__(self, config: dict):
+        self.n_estimators = config.get('n_estimators', 200)
+        self.max_depth = config.get('max_depth', 5)
+        self.learning_rate = config.get('learning_rate', 0.05)
+        
+        self.model_long = None
+        self.model_short = None
+        self.feature_names = None
+        
+    def train(self, df: pd.DataFrame, feature_cols: list, 
+             test_size: float = 0.2, oos_size: float = 0.1) -> Dict:
+        """訓練做多和做空兩個模型"""
+        
+        df_clean = df[feature_cols + ['label']].dropna()
+        
+        total_samples = len(df_clean)
+        oos_samples = int(total_samples * oos_size)
+        train_val_samples = total_samples - oos_samples
+        
+        df_train_val = df_clean.iloc[:train_val_samples]
+        df_oos = df_clean.iloc[train_val_samples:]
+        
+        X = df_train_val[feature_cols]
+        y = df_train_val['label']
+        
+        X_train, X_val, y_train, y_val = train_test_split(
+            X, y, test_size=test_size, shuffle=False
+        )
+        
+        print(f"訓練集: {len(X_train)} | 驗證集: {len(X_val)} | OOS測試集: {len(df_oos)}")
+        
+        y_train_long = (y_train == 1).astype(int)
+        y_train_short = (y_train == -1).astype(int)
+        y_val_long = (y_val == 1).astype(int)
+        y_val_short = (y_val == -1).astype(int)
+        
+        print("訓練做多模型...")
+        self.model_long = xgb.XGBClassifier(
+            n_estimators=self.n_estimators,
+            max_depth=self.max_depth,
+            learning_rate=self.learning_rate,
+            objective='binary:logistic',
+            eval_metric='logloss',
+            random_state=42
+        )
+        self.model_long.fit(X_train, y_train_long)
+        
+        print("訓練做空模型...")
+        self.model_short = xgb.XGBClassifier(
+            n_estimators=self.n_estimators,
+            max_depth=self.max_depth,
+            learning_rate=self.learning_rate,
+            objective='binary:logistic',
+            eval_metric='logloss',
+            random_state=42
+        )
+        self.model_short.fit(X_train, y_train_short)
+        
+        self.feature_names = feature_cols
+        
+        train_acc_long = accuracy_score(y_train_long, self.model_long.predict(X_train))
+        val_acc_long = accuracy_score(y_val_long, self.model_long.predict(X_val))
+        
+        train_acc_short = accuracy_score(y_train_short, self.model_short.predict(X_train))
+        val_acc_short = accuracy_score(y_val_short, self.model_short.predict(X_val))
+        
+        if len(df_oos) > 0:
+            X_oos = df_oos[feature_cols]
+            y_oos = df_oos['label']
+            y_oos_long = (y_oos == 1).astype(int)
+            y_oos_short = (y_oos == -1).astype(int)
+            
+            oos_acc_long = accuracy_score(y_oos_long, self.model_long.predict(X_oos))
+            oos_acc_short = accuracy_score(y_oos_short, self.model_short.predict(X_oos))
+        else:
+            oos_acc_long = 0
+            oos_acc_short = 0
+        
+        results = {
+            'train_samples': len(X_train),
+            'val_samples': len(X_val),
+            'oos_samples': len(df_oos),
+            'train_acc_long': train_acc_long,
+            'val_acc_long': val_acc_long,
+            'oos_acc_long': oos_acc_long,
+            'train_acc_short': train_acc_short,
+            'val_acc_short': val_acc_short,
+            'oos_acc_short': oos_acc_short
+        }
+        
+        print(f"做多模型 - 訓練準確率: {train_acc_long:.4f} | 驗證準確率: {val_acc_long:.4f} | OOS準確率: {oos_acc_long:.4f}")
+        print(f"做空模型 - 訓練準確率: {train_acc_short:.4f} | 驗證準確率: {val_acc_short:.4f} | OOS準確率: {oos_acc_short:.4f}")
+        
+        return results
+    
+    def predict(self, df: pd.DataFrame) -> pd.DataFrame:
+        """預測信號是否有效"""
+        df = df.copy()
+        
+        if self.model_long is None or self.model_short is None:
+            raise ValueError("模型尚未訓練")
+        
+        X = df[self.feature_names].fillna(0)
+        
+        pred_long = self.model_long.predict(X)
+        pred_short = self.model_short.predict(X)
+        
+        pred_long_proba = self.model_long.predict_proba(X)[:, 1]
+        pred_short_proba = self.model_short.predict_proba(X)[:, 1]
+        
+        df['pred_long_valid'] = pred_long
+        df['pred_short_valid'] = pred_short
+        df['pred_long_confidence'] = pred_long_proba
+        df['pred_short_confidence'] = pred_short_proba
+        
+        return df
+    
+    def save(self, save_dir: Path):
+        """保存模型"""
+        save_dir = Path(save_dir)
+        save_dir.mkdir(parents=True, exist_ok=True)
+        
+        joblib.dump(self.model_long, save_dir / 'model_long.pkl')
+        joblib.dump(self.model_short, save_dir / 'model_short.pkl')
+        
+        with open(save_dir / 'feature_names.json', 'w') as f:
+            json.dump(self.feature_names, f)
+        
+        print(f"模型已保存至: {save_dir}")
+    
+    def load(self, load_dir: Path):
+        """加載模型"""
+        load_dir = Path(load_dir)
+        
+        self.model_long = joblib.load(load_dir / 'model_long.pkl')
+        self.model_short = joblib.load(load_dir / 'model_short.pkl')
+        
+        with open(load_dir / 'feature_names.json', 'r') as f:
+            self.feature_names = json.load(f)
+        
+        print(f"模型已加載: {load_dir}")
