@@ -15,6 +15,7 @@ class BacktestEngine:
         self.maker_fee = config.get('maker_fee', 0.0002)
         self.taker_fee = config.get('taker_fee', 0.0004)
         self.slippage = config.get('slippage', 0.0001)
+        self.position_size_pct = config.get('position_size_pct', 1.0)
     
     def fetch_latest_data(self, symbol: str, timeframe: str, days: int = 30) -> pd.DataFrame:
         """從Binance API獲取最新數據"""
@@ -182,9 +183,9 @@ class BacktestEngine:
                     row.get('pred_long_confidence', 0) >= min_confidence):
                     
                     entry_price = current_price * (1 + self.slippage)
-                    position_value = capital * self.leverage
+                    margin = capital * self.position_size_pct
+                    position_value = margin * self.leverage
                     position_size = position_value / entry_price
-                    margin = capital
                     fee = position_value * self.taker_fee
                     capital -= fee
                     
@@ -204,9 +205,9 @@ class BacktestEngine:
                       row.get('pred_short_confidence', 0) >= min_confidence):
                     
                     entry_price = current_price * (1 - self.slippage)
-                    position_value = capital * self.leverage
+                    margin = capital * self.position_size_pct
+                    position_value = margin * self.leverage
                     position_size = position_value / entry_price
-                    margin = capital
                     fee = position_value * self.taker_fee
                     capital -= fee
                     
