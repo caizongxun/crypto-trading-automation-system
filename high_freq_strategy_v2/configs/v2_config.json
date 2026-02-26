@@ -1,0 +1,103 @@
+{
+  "strategy": "high_frequency_v2",
+  "version": "2.0.0",
+  "description": "多時間框架深度學習高頻交易策略",
+  
+  "targets": {
+    "monthly_trades": 150,
+    "monthly_return": 0.50,
+    "win_rate": 0.60,
+    "max_drawdown": 0.15,
+    "profit_factor": 2.0
+  },
+  
+  "data": {
+    "primary_timeframe": "15m",
+    "secondary_timeframes": ["1h", "4h"],
+    "sequence_length": 30,
+    "training_days": 90,
+    "validation_split": 0.2
+  },
+  
+  "microstructure": {
+    "volume_threshold": 2.0,
+    "imbalance_window": 20,
+    "spread_window": 10
+  },
+  
+  "temporal_features": {
+    "lookback_periods": [5, 10, 20, 30, 50],
+    "use_multi_timeframe": true,
+    "use_time_features": true
+  },
+  
+  "transformer": {
+    "d_model": 128,
+    "nhead": 8,
+    "num_layers": 4,
+    "dim_feedforward": 512,
+    "dropout": 0.1,
+    "sequence_length": 30
+  },
+  
+  "lstm": {
+    "hidden_dim": 128,
+    "num_layers": 3,
+    "dropout": 0.2,
+    "bidirectional": true
+  },
+  
+  "lightgbm": {
+    "num_leaves": 31,
+    "learning_rate": 0.05,
+    "n_estimators": 200,
+    "max_depth": -1,
+    "min_child_samples": 20
+  },
+  
+  "ensemble": {
+    "voting_weights": [0.4, 0.3, 0.3],
+    "min_confidence": 0.6,
+    "require_agreement": 2
+  },
+  
+  "market_regime": {
+    "window": 50,
+    "n_regimes": 4
+  },
+  
+  "signal_filtering": {
+    "min_signal_strength": 1,
+    "min_confidence_long": 0.6,
+    "min_confidence_short": 0.65,
+    "min_risk_reward": 2.0,
+    "max_daily_trades": 6
+  },
+  
+  "risk_management": {
+    "position_size_pct": 0.95,
+    "max_leverage": 5,
+    "stop_loss_pct": 0.005,
+    "take_profit_pct": 0.015,
+    "use_dynamic_sltp": true,
+    "atr_period": 14,
+    "atr_multiplier_sl": 1.0,
+    "atr_multiplier_tp": 2.5,
+    "trailing_stop": false
+  },
+  
+  "training": {
+    "epochs": 50,
+    "batch_size": 32,
+    "learning_rate": 0.001,
+    "early_stopping_patience": 10,
+    "use_class_weights": true
+  },
+  
+  "backtest": {
+    "initial_capital": 10,
+    "maker_fee": 0.0002,
+    "taker_fee": 0.0004,
+    "slippage": 0.0001
+  }
+}
