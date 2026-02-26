@@ -52,10 +52,17 @@ def create_v11_labels(
     df['signal_strength'] = 0.0
     
     if 'pivot_type' not in df.columns:
+        print("⚠️ 未找到 pivot_type 欄位")
         return df
     
     # 找所有反轉點
-    pivot_indices = df[df['pivot_type'].notna()].index
+    pivot_indices = df[df['pivot_type'].notna()].index.tolist()
+    
+    print(f"\n識別到 {len(pivot_indices)} 個 ZigZag 反轉點")
+    
+    signal_count = 0
+    long_count = 0
+    short_count = 0
     
     for pivot_idx in pivot_indices:
         pivot_type = df.loc[pivot_idx, 'pivot_type']
@@ -63,14 +70,18 @@ def create_v11_labels(
         swing_pct = df.loc[pivot_idx, 'zigzag_swing']
         
         # 跳過太小的反轉
-        if swing_pct < 1.0:  # < 1%
+        if swing_pct < 0.5:  # 降低到 0.5%
             continue
         
-        # 確認條件
-        if not check_confirmation(
-            df, pivot_idx, pivot_type,
-            require_rsi_div, require_volume, require_sr
-        ):
+        # 確認條件 (如果要求的話)
+        confirmed = True
+        if require_rsi_div or require_volume or require_sr:
+            confirmed = check_confirmation(
+                df, pivot_idx, pivot_type,
+                require_rsi_div, require_volume, require_sr
+            )
+        
+        if not confirmed:
             continue
         
         # 計算信號強度
@@ -88,6 +99,7 @@ def create_v11_labels(
             sl_price = pivot_price * (1 - sl_distance)
             
             signal_label = 1
+            long_count += 1
         
         else:  # pivot_type == 'high'
             # Short 信號
@@ -98,15 +110,29 @@ def create_v11_labels(
             sl_price = pivot_price * (1 + sl_distance)
             
             signal_label = -1
+            short_count += 1
         
         # 標記提前 N 根K線
-        signal_idx = max(0, pivot_idx - lookahead_bars)
+        pivot_loc = df.index.get_loc(pivot_idx)
+        signal_loc = max(0, pivot_loc - lookahead_bars)
+        signal_idx = df.index[signal_loc]
         
         if signal_idx in df.index:
             df.loc[signal_idx, 'label'] = signal_label
             df.loc[signal_idx, 'target_tp'] = tp_price
             df.loc[signal_idx, 'target_sl'] = sl_price
             df.loc[signal_idx, 'signal_strength'] = strength
+            signal_count += 1
+    
+    print(f"生成 {signal_count} 個信號 (Long: {long_count}, Short: {short_count})")
+    print(f"信號率: {signal_count/len(df)*100:.2f}%")
+    
+    if signal_count == 0:
+        print("\n⚠️ 警告: 沒有生成任何信號!")
+        print("建議:")
+        print("1. 降低 ZigZag 門檻 (2-3%)")
+        print("2. 增加訓練天數 (180-365天)")
+        print("3. 關閉部分確認條件")
     
     return df
 
@@ -129,28 +155,28 @@ def check_confirmation(
     # RSI 背離確認
     if require_rsi_div:
         if pivot_type == 'low':
-            if df.loc[idx, 'rsi_bullish_div'] != 1:
+            if 'rsi_bullish_div' not in df.columns or df.loc[idx, 'rsi_bullish_div'] != 1:
                 return False
         else:
-            if df.loc[idx, 'rsi_bearish_div'] != 1:
+            if 'rsi_bearish_div' not in df.columns or df.loc[idx, 'rsi_bearish_div'] != 1:
                 return False
     
     # 量能確認
     if require_volume:
         if pivot_type == 'low':
-            if df.loc[idx, 'volume_bullish_div'] != 1:
+            if 'volume_bullish_div' not in df.columns or df.loc[idx, 'volume_bullish_div'] != 1:
                 return False
         else:
-            if df.loc[idx, 'volume_bearish_div'] != 1:
+            if 'volume_bearish_div' not in df.columns or df.loc[idx, 'volume_bearish_div'] != 1:
                 return False
     
     # 支撐/阻力確認
     if require_sr:
         if pivot_type == 'low':
-            if df.loc[idx, 'near_support'] != 1:
+            if 'near_support' not in df.columns or df.loc[idx, 'near_support'] != 1:
                 return False
         else:
-            if df.loc[idx, 'near_resistance'] != 1:
+            if 'near_resistance' not in df.columns or df.loc[idx, 'near_resistance'] != 1:
                 return False
     
     return True
@@ -176,27 +202,31 @@ def calculate_signal_strength(
     strength += swing_score
     
     # 2. RSI 背離 (+0.2)
-    if pivot_type == 'low' and df.loc[idx, 'rsi_bullish_div'] == 1:
-        strength += 0.2
-    elif pivot_type == 'high' and df.loc[idx, 'rsi_bearish_div'] == 1:
-        strength += 0.2
+    if 'rsi_bullish_div' in df.columns and 'rsi_bearish_div' in df.columns:
+        if pivot_type == 'low' and df.loc[idx, 'rsi_bullish_div'] == 1:
+            strength += 0.2
+        elif pivot_type == 'high' and df.loc[idx, 'rsi_bearish_div'] == 1:
+            strength += 0.2
     
     # 3. MACD 交叉 (+0.15)
-    if pivot_type == 'low' and df.loc[idx, 'macd_bullish_cross'] == 1:
-        strength += 0.15
-    elif pivot_type == 'high' and df.loc[idx, 'macd_bearish_cross'] == 1:
-        strength += 0.15
+    if 'macd_bullish_cross' in df.columns and 'macd_bearish_cross' in df.columns:
+        if pivot_type == 'low' and df.loc[idx, 'macd_bullish_cross'] == 1:
+            strength += 0.15
+        elif pivot_type == 'high' and df.loc[idx, 'macd_bearish_cross'] == 1:
+            strength += 0.15
     
     # 4. 布林帶反彈 (+0.15)
-    if pivot_type == 'low' and df.loc[idx, 'bb_bounce_up'] == 1:
-        strength += 0.15
-    elif pivot_type == 'high' and df.loc[idx, 'bb_bounce_down'] == 1:
-        strength += 0.15
+    if 'bb_bounce_up' in df.columns and 'bb_bounce_down' in df.columns:
+        if pivot_type == 'low' and df.loc[idx, 'bb_bounce_up'] == 1:
+            strength += 0.15
+        elif pivot_type == 'high' and df.loc[idx, 'bb_bounce_down'] == 1:
+            strength += 0.15
     
     # 5. 支撐/阻力 (+0.2)
-    if pivot_type == 'low' and df.loc[idx, 'near_support'] == 1:
-        strength += 0.2
-    elif pivot_type == 'high' and df.loc[idx, 'near_resistance'] == 1:
-        strength += 0.2
+    if 'near_support' in df.columns and 'near_resistance' in df.columns:
+        if pivot_type == 'low' and df.loc[idx, 'near_support'] == 1:
+            strength += 0.2
+        elif pivot_type == 'high' and df.loc[idx, 'near_resistance'] == 1:
+            strength += 0.2
     
     return min(strength, 1.0)
