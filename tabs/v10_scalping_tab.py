@@ -16,10 +16,9 @@ from datetime import datetime
 
 
 def render():
-    st.header("📈 v10 剝頭皮策略回測")
+    st.header("❏ v10 剝頭皮策略回測")
     
-    # 說明
-    with st.expander("📊 策略介紹", expanded=False):
+    with st.expander("策略介紹", expanded=False):
         st.markdown("""
         ### v10 高頻剝頭皮策略
         
@@ -41,12 +40,11 @@ def render():
         - 最大回撤: **-5.5%**
         """)
     
-    # 分頁
     tab1, tab2, tab3, tab4 = st.tabs([
-        "📊 報告概覽",
-        "📈 詳細分析", 
-        "📝 交易明細",
-        "⚙️ 生成報告"
+        "報告概覽",
+        "詳細分析", 
+        "交易明細",
+        "生成報告"
     ])
     
     with tab1:
@@ -69,7 +67,6 @@ def load_latest_report():
     if not results_dir.exists():
         return None, None, None
     
-    # 找最新檔案
     trade_files = sorted(results_dir.glob('trades_*.csv'))
     equity_files = sorted(results_dir.glob('equity_curve_*.csv'))
     summary_files = sorted(results_dir.glob('summary_*.json'))
@@ -77,7 +74,6 @@ def load_latest_report():
     if not trade_files or not equity_files or not summary_files:
         return None, None, None
     
-    # 載入數據
     trades_df = pd.read_csv(trade_files[-1])
     equity_df = pd.read_csv(equity_files[-1])
     
@@ -92,56 +88,58 @@ def render_overview_tab():
     trades_df, equity_df, data = load_latest_report()
     
     if trades_df is None:
-        st.warning("⚠️ 未找到 v10 報告數據")
+        st.warning("未找到 v10 報告數據")
         st.info("請先在 '生成報告' 分頁執行回測")
         return
     
     summary = data['summary']
     config = data['config']
     
-    # 最新更新時間
     st.caption(f"最後更新: {data.get('timestamp', 'N/A')}")
     
-    # 關鍵指標
-    st.subheader("🎯 關鍵指標")
+    st.subheader("關鍵指標")
     
     col1, col2, col3, col4 = st.columns(4)
     
+    # 計算勝場數
+    total_trades = summary['total_trades']
+    win_rate = summary['win_rate']
+    wins = int(total_trades * win_rate)
+    
     with col1:
         st.metric(
-            "💰 總報酬",
+            "總報酬",
             f"{summary['total_return_pct']*100:.2f}%",
             delta=f"${summary['total_pnl']:.2f}"
         )
     
     with col2:
         st.metric(
-            "🎯 勝率",
+            "勝率",
             f"{summary['win_rate']*100:.2f}%",
-            delta=f"{summary['wins']}/{summary['total_trades']} 勝"
+            delta=f"{wins}/{total_trades} 勝"
         )
     
     with col3:
         st.metric(
-            "📈 Sharpe",
+            "Sharpe",
             f"{summary['sharpe_ratio']:.2f}",
             delta="很優秀" if summary['sharpe_ratio'] > 3 else None
         )
     
     with col4:
         st.metric(
-            "🚨 最大回撤",
+            "最大回撤",
             f"{summary['max_drawdown']*100:.2f}%",
             delta="低風險" if summary['max_drawdown'] < 0.1 else None
         )
     
     st.divider()
     
-    # 策略配置
     col1, col2 = st.columns(2)
     
     with col1:
-        st.subheader("⚙️ 策略配置")
+        st.subheader("策略配置")
         st.json({
             "策略": config['strategy'],
             "時間框架": config['timeframe'],
@@ -152,7 +150,7 @@ def render_overview_tab():
         })
     
     with col2:
-        st.subheader("📊 統計資訊")
+        st.subheader("統計資訊")
         
         annual_return = summary['total_return_pct'] * (365 / 234)
         trades_per_day = summary['total_trades'] / 234
@@ -168,8 +166,7 @@ def render_overview_tab():
     
     st.divider()
     
-    # 資金曲線
-    st.subheader("📈 資金曲線")
+    st.subheader("資金曲線")
     
     equity_df['time'] = pd.to_datetime(equity_df['time'])
     
@@ -203,8 +200,7 @@ def render_overview_tab():
     
     st.plotly_chart(fig, use_container_width=True)
     
-    # 累積 PnL
-    st.subheader("💵 累積 PnL")
+    st.subheader("累積 PnL")
     
     trades_df['cumulative_pnl'] = trades_df['pnl'].cumsum()
     
@@ -236,15 +232,14 @@ def render_analysis_tab():
     trades_df, equity_df, data = load_latest_report()
     
     if trades_df is None:
-        st.warning("⚠️ 未找到報告數據")
+        st.warning("未找到報告數據")
         return
     
     trades_df['entry_time'] = pd.to_datetime(trades_df['entry_time'])
     trades_df['hour'] = trades_df['entry_time'].dt.hour
     trades_df['weekday'] = trades_df['entry_time'].dt.dayofweek
     
-    # PnL 分佈
-    st.subheader("📊 PnL 分佈分析")
+    st.subheader("PnL 分佈分析")
     
     col1, col2 = st.columns(2)
     
@@ -267,7 +262,6 @@ def render_analysis_tab():
         st.plotly_chart(fig, use_container_width=True)
     
     with col2:
-        # 勝率移動平均
         win_rate_ma = trades_df['win'].rolling(100, min_periods=1).mean() * 100
         
         fig = go.Figure()
@@ -289,13 +283,11 @@ def render_analysis_tab():
     
     st.divider()
     
-    # 時間分析
-    st.subheader("⏰ 時間分析")
+    st.subheader("時間分析")
     
     col1, col2 = st.columns(2)
     
     with col1:
-        # 按小時
         hour_stats = trades_df.groupby('hour').agg({
             'pnl': 'sum',
             'win': 'mean'
@@ -335,7 +327,6 @@ def render_analysis_tab():
         st.plotly_chart(fig, use_container_width=True)
     
     with col2:
-        # 按星期
         weekday_stats = trades_df.groupby('weekday').agg({
             'pnl': 'sum',
             'win': 'mean'
@@ -378,8 +369,7 @@ def render_analysis_tab():
     
     st.divider()
     
-    # Long vs Short
-    st.subheader("🔄 Long vs Short 對比")
+    st.subheader("Long vs Short 對比")
     
     side_stats = trades_df.groupby('side').agg({
         'pnl': ['sum', 'mean', 'count'],
@@ -430,8 +420,7 @@ def render_analysis_tab():
     
     st.divider()
     
-    # 出場原因
-    st.subheader("🚺 出場原因分析")
+    st.subheader("出場原因分析")
     
     exit_stats = trades_df.groupby('exit_reason').agg({
         'pnl': ['sum', 'mean', 'count']
@@ -472,12 +461,11 @@ def render_trades_tab():
     trades_df, _, _ = load_latest_report()
     
     if trades_df is None:
-        st.warning("⚠️ 未找到報告數據")
+        st.warning("未找到報告數據")
         return
     
-    st.subheader("📝 全部交易明細")
+    st.subheader("全部交易明細")
     
-    # 篩選選項
     col1, col2, col3 = st.columns(3)
     
     with col1:
@@ -500,7 +488,6 @@ def render_trades_tab():
             options=['全部', '獲利', '虧損']
         )
     
-    # 應用篩選
     filtered_df = trades_df[
         (trades_df['side'].isin(side_filter)) &
         (trades_df['exit_reason'].isin(exit_filter))
@@ -511,7 +498,6 @@ def render_trades_tab():
     elif win_filter == '虧損':
         filtered_df = filtered_df[filtered_df['win'] == False]
     
-    # 顯示統計
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
@@ -525,7 +511,6 @@ def render_trades_tab():
     
     st.divider()
     
-    # 顯示表格
     display_df = filtered_df[[
         'entry_time', 'side', 'entry_price', 'exit_price',
         'exit_reason', 'pnl', 'return_pct', 'bars_held', 'win'
@@ -536,7 +521,7 @@ def render_trades_tab():
     display_df['exit_price'] = display_df['exit_price'].apply(lambda x: f"${x:.2f}")
     display_df['pnl'] = display_df['pnl'].apply(lambda x: f"${x:.2f}")
     display_df['return_pct'] = display_df['return_pct'].apply(lambda x: f"{x*100:.2f}%")
-    display_df['win'] = display_df['win'].apply(lambda x: '✅' if x else '❌')
+    display_df['win'] = display_df['win'].apply(lambda x: 'V' if x else 'X')
     
     display_df.columns = [
         '進場時間', '方向', '進場價', '出場價',
@@ -549,10 +534,9 @@ def render_trades_tab():
         height=600
     )
     
-    # 下載按鈕
     csv = filtered_df.to_csv(index=False)
     st.download_button(
-        label="💾 下載 CSV",
+        label="下載 CSV",
         data=csv,
         file_name=f"v10_trades_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
         mime="text/csv"
@@ -561,45 +545,41 @@ def render_trades_tab():
 
 def render_generate_tab():
     """ Tab 4: 生成報告 """
-    st.subheader("⚙️ 生成 v10 回測報告")
+    st.subheader("生成 v10 回測報告")
     
     st.info("""
-    💡 **說明:**
+    **說明:**
     
     這裡可以重新執行 v10 回測並生成詳細報告。
     
-    生成後的檔案會儲存在 `backtest_results/v10_detailed/` 目錄下：
+    生成後的檔案會儲存在 `backtest_results/v10_detailed/` 目錄下:
     - `trades_*.csv` - 交易明細
     - `equity_curve_*.csv` - 資金曲線
     - `summary_*.json` - 摘要統計
     - `analysis_*.png` - 9 張分析圖表
     """)
     
-    # 檢查檔案是否存在
     results_dir = Path('backtest_results/v10_detailed')
     
     if results_dir.exists():
         files = list(results_dir.glob('*'))
-        st.success(f"✅ 已找到 {len(files)} 個報告檔案")
+        st.success(f"已找到 {len(files)} 個報告檔案")
         
-        # 顯示最新檔案
         if files:
             latest_file = max(files, key=lambda x: x.stat().st_mtime)
             st.caption(f"最新檔案: {latest_file.name}")
             st.caption(f"更新時間: {datetime.fromtimestamp(latest_file.stat().st_mtime)}")
     else:
-        st.warning("⚠️ 尚未生成任何報告")
+        st.warning("尚未生成任何報告")
     
     st.divider()
     
-    # 生成按鈕
-    if st.button("🚀 執行回測並生成報告", type="primary"):
+    if st.button("執行回測並生成報告", type="primary"):
         with st.spinner("正在執行 v10 回測..."):
             import subprocess
             import sys
             
             try:
-                # 執行 generate_v10_report.py
                 result = subprocess.run(
                     [sys.executable, 'generate_v10_report.py'],
                     capture_output=True,
@@ -608,26 +588,25 @@ def render_generate_tab():
                 )
                 
                 if result.returncode == 0:
-                    st.success("✅ 報告生成成功!")
+                    st.success("報告生成成功!")
                     st.balloons()
-                    st.info("🔄 請切換到其他分頁查看結果")
+                    st.info("請切換到其他分頁查看結果")
                     
-                    # 顯示輸出
-                    with st.expander("📝 查看執行輸出"):
+                    with st.expander("查看執行輸出"):
                         st.code(result.stdout, language='text')
                 else:
-                    st.error("❌ 執行失敗")
+                    st.error("執行失敗")
                     st.code(result.stderr, language='text')
                     
             except subprocess.TimeoutExpired:
-                st.error("❌ 執行超時 (5分鐘)")
+                st.error("執行超時 (5分鐘)")
             except Exception as e:
-                st.error(f"❌ 發生錯誤: {e}")
+                st.error(f"發生錯誤: {e}")
     
     st.divider()
     
     st.markdown("""
-    ### 📚 相關文件
+    ### 相關文件
     
     - `generate_v10_report.py` - 報告生成程式
     - `backtest_v10_scalping.py` - v10 回測引擎
