@@ -1,0 +1,1 @@
+{\n  \"binance\": {\n    \"api_key\": \"YOUR_API_KEY_HERE\",\n    \"api_secret\": \"YOUR_API_SECRET_HERE\",\n    \"testnet\": false\n  },\n  \"bybit\": {\n    \"api_key\": \"YOUR_API_KEY_HERE\",\n    \"api_secret\": \"YOUR_API_SECRET_HERE\",\n    \"demo\": true\n  }\n}\n
