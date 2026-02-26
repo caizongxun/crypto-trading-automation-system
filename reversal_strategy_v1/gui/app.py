@@ -99,8 +99,6 @@ def render_training_tab():
             key="train_timeframe"
         )
         
-        training_days = st.slider("訓練數據天數", 30, 180, 90, 10)
-        
         st.markdown("---")
         
         st.subheader("信號檢測")
@@ -128,7 +126,6 @@ def render_training_tab():
             st.session_state['training_params'] = {
                 'symbol': symbol,
                 'timeframe': timeframe,
-                'training_days': training_days,
                 'lookback': lookback,
                 'imbalance_threshold': imbalance_threshold,
                 'forward_window': forward_window,
@@ -173,19 +170,11 @@ def render_training_tab():
                     }
                 }
                 
-                # 1. 從Binance API加載最近的數據
-                with st.spinner(f'步驟 1/5: 從Binance加載最近{params["training_days"]}天數據...'):
-                    engine = BacktestEngine({'initial_capital': 10, 'leverage': 3, 'maker_fee': 0.0002, 'taker_fee': 0.0004, 'slippage': 0.0001})
-                    df = engine.fetch_latest_data(params['symbol'], params['timeframe'], days=params['training_days'])
-                    
-                    if len(df) == 0:
-                        st.error("無法獲取數據")
-                        st.session_state['training_started'] = False
-                        return
-                    
-                    st.success(f"加載完成: {len(df)} 筆數據 (約{params['training_days']}天)")
+                with st.spinner('步驟 1/5: 加載歷史數據...'):
+                    loader = HFDataLoader()
+                    df = loader.load_klines(params['symbol'], params['timeframe'])
+                    st.success(f"加載完成: {len(df)} 筆數據")
                 
-                # 2. 信號檢測
                 with st.spinner('步驟 2/5: 檢測反轉信號...'):
                     signal_detector = SignalDetector(config['signal_detection'])
                     df = signal_detector.detect_signals(df)
@@ -193,7 +182,6 @@ def render_training_tab():
                     short_signals = df['signal_short'].sum()
                     st.success(f"做多信號: {long_signals} | 做空信號: {short_signals}")
                 
-                # 3. 特徵工程
                 with st.spinner('步驟 3/5: 生成ML特徵...'):
                     feature_engineer = FeatureEngineer(config['feature_engineering'])
                     df = feature_engineer.create_features(df)
@@ -206,7 +194,6 @@ def render_training_tab():
                     feature_cols = feature_engineer.get_feature_names()
                     st.success(f"特徵數量: {len(feature_cols)}")
                 
-                # 4. 訓練模型
                 with st.spinner('步驟 4/5: 訓練機器學習模型...'):
                     ml_predictor = MLPredictor(config['ml_model'])
                     train_results = ml_predictor.train(
@@ -216,7 +203,6 @@ def render_training_tab():
                         oos_size=params['oos_size']
                     )
                 
-                # 5. 保存模型
                 with st.spinner('步驟 5/5: 保存模型...'):
                     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
                     model_name = f"{params['symbol']}_{params['timeframe']}_v1_{timestamp}"
@@ -227,7 +213,6 @@ def render_training_tab():
                         'symbol': params['symbol'],
                         'timeframe': params['timeframe'],
                         'training_date': timestamp,
-                        'training_days': params['training_days'],
                         'data_samples': len(df),
                         'long_signals': int(long_signals),
                         'short_signals': int(short_signals),
@@ -239,7 +224,6 @@ def render_training_tab():
                     
                     st.success(f"訓練完成: {model_name}")
                 
-                # 顯示結果
                 col_a, col_b, col_c = st.columns(3)
                 with col_a:
                     st.metric("訓練樣本數", train_results['train_samples'])
@@ -261,19 +245,9 @@ def render_training_tab():
                 
             except Exception as e:
                 st.error(f"訓練失敗: {str(e)}")
-                import traceback
-                st.code(traceback.format_exc())
                 st.session_state['training_started'] = False
         else:
             st.info("請配置參數後點擊開始訓練")
-            st.markdown("---")
-            st.warning(
-                "**訓練數據來源: Binance API**\n\n"
-                "- 使用最新的市場數據進行訓練\n"
-                "- 預設90天數據(可調整30-180天)\n"
-                "- 訓練和回測使用相同時期的數據,避免時代錯位\n"
-                "- 訓練時間快速(通常1-2分鐘)"
-            )
 
 def render_backtest_tab():
     """回測頁面"""
@@ -303,7 +277,16 @@ def render_backtest_tab():
         
         st.subheader("回測參數")
         
-        backtest_days = st.slider("回測天數", 7, 60, 30)
+        data_source = st.radio(
+            "數據源",
+            ["Binance API (最新)", "HuggingFace (歷史)"],
+            index=0
+        )
+        
+        if data_source == "Binance API (最新)":
+            backtest_days = st.slider("回測天數", 7, 60, 30)
+        else:
+            backtest_days = st.slider("回測天數", 30, 365, 90)
         
         initial_capital = st.number_input("初始資金 (USDT)", 10, 10000, 10)
         leverage = st.slider("槓桿倍數", 1, 20, 3)
@@ -322,6 +305,7 @@ def render_backtest_tab():
         if st.button("運行回測", type="primary", use_container_width=True, disabled=(model_version=="無可用模型")):
             st.session_state['backtest_params'] = {
                 'model': model_version,
+                'data_source': 'binance' if 'Binance' in data_source else 'hf',
                 'days': backtest_days,
                 'capital': initial_capital,
                 'leverage': leverage,
@@ -349,14 +333,20 @@ def render_backtest_tab():
                     config = model_config['config']
                 
                 with st.spinner('加載歷史數據...'):
-                    backtest_engine = BacktestEngine({
-                        'initial_capital': params['capital'],
-                        'leverage': params['leverage'],
-                        'maker_fee': params['maker_fee'],
-                        'taker_fee': params['taker_fee'],
-                        'slippage': 0.0001
-                    })
-                    df = backtest_engine.fetch_latest_data(symbol, timeframe, days=params['days'])
+                    if params['data_source'] == 'binance':
+                        backtest_engine = BacktestEngine({
+                            'initial_capital': params['capital'],
+                            'leverage': params['leverage'],
+                            'maker_fee': params['maker_fee'],
+                            'taker_fee': params['taker_fee'],
+                            'slippage': 0.0001
+                        })
+                        df = backtest_engine.fetch_latest_data(symbol, timeframe, days=params['days'])
+                    else:
+                        loader = HFDataLoader()
+                        df = loader.load_klines(symbol, timeframe)
+                        bars_per_day = {'15m': 96, '1h': 24, '4h': 6}.get(timeframe, 96)
+                        df = df.tail(params['days'] * bars_per_day)
                 
                 with st.spinner('檢測交易信號...'):
                     signal_detector = SignalDetector(config['signal_detection'])
