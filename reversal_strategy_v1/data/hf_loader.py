@@ -7,6 +7,7 @@ from huggingface_hub import hf_hub_download
 import pyarrow.parquet as pq
 from pathlib import Path
 import os
+from datetime import datetime, timedelta
 
 class HFDataLoader:
     def __init__(self, repo_id: str = "zongowo111/v2-crypto-ohlcv-data"):
@@ -25,8 +26,15 @@ class HFDataLoader:
         
         self.available_timeframes = ['1m', '15m', '1h', '1d']
     
-    def load_klines(self, symbol: str, timeframe: str) -> pd.DataFrame:
-        """加載K線數據"""
+    def load_klines(self, symbol: str, timeframe: str, recent_days: int = None) -> pd.DataFrame:
+        """
+        加載K線數據
+        
+        Args:
+            symbol: 交易對
+            timeframe: 時間框架
+            recent_days: 只加載最近N天的數據(可選,None則加載所有數據)
+        """
         
         if symbol not in self.available_symbols:
             print(f"警告: {symbol} 不在可用符號列表中")
@@ -84,8 +92,15 @@ class HFDataLoader:
             
             df = df.dropna()
             
+            # 如果指定了recent_days,只保留最近的數據
+            if recent_days is not None:
+                cutoff_date = datetime.now() - timedelta(days=recent_days)
+                df = df[df['timestamp'] >= cutoff_date]
+                print(f"築選最近{recent_days}天數據")
+            
             print(f"成功加載 {len(df)} 筆數據")
-            print(f"時間範圍: {df['timestamp'].min()} 至 {df['timestamp'].max()}")
+            if len(df) > 0:
+                print(f"時間範圍: {df['timestamp'].min()} 至 {df['timestamp'].max()}")
             
             return df
             
