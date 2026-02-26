@@ -53,8 +53,7 @@ def train_v11_model(
     
     # 訓練 Long 模型
     if train_long:
-        print("
-[Long] 開始訓練...")
+        print("\n[Long] 開始訓練...")
         
         y_train_long = (y_train == 1).astype(int)
         y_test_long = (y_test == 1).astype(int)
@@ -87,8 +86,7 @@ def train_v11_model(
     
     # 訓練 Short 模型
     if train_short:
-        print("
-[Short] 開始訓練...")
+        print("\n[Short] 開始訓練...")
         
         y_train_short = (y_train == -1).astype(int)
         y_test_short = (y_test == -1).astype(int)
@@ -135,8 +133,10 @@ def train_single_model(X_train, y_train, X_test, y_test, model_type, use_class_w
         
         class_weight = None
         if use_class_weights:
-            pos_weight = len(y_train) / (2 * y_train.sum())
-            class_weight = {0: 1.0, 1: pos_weight}
+            pos_count = y_train.sum()
+            if pos_count > 0:
+                pos_weight = len(y_train) / (2 * pos_count)
+                class_weight = {0: 1.0, 1: pos_weight}
         
         model = CatBoostClassifier(
             iterations=500,
@@ -153,7 +153,9 @@ def train_single_model(X_train, y_train, X_test, y_test, model_type, use_class_w
         
         scale_pos_weight = 1.0
         if use_class_weights:
-            scale_pos_weight = len(y_train) / y_train.sum()
+            pos_count = y_train.sum()
+            if pos_count > 0:
+                scale_pos_weight = (len(y_train) - pos_count) / pos_count
         
         model = XGBClassifier(
             n_estimators=500,
@@ -175,7 +177,8 @@ def train_single_model(X_train, y_train, X_test, y_test, model_type, use_class_w
             learning_rate=0.05,
             max_depth=6,
             class_weight=class_weight,
-            random_state=42
+            random_state=42,
+            verbose=-1
         )
     
     # 訓練
@@ -206,7 +209,8 @@ def save_training_report(results, symbol, timeframe):
         'symbol': symbol,
         'timeframe': timeframe,
         'version': 'v11',
-        'results': {}
+        'results': {},
+        'config': {}
     }
     
     for direction in ['long', 'short']:
@@ -223,5 +227,4 @@ def save_training_report(results, symbol, timeframe):
     with open(report_file, 'w', encoding='utf-8') as f:
         json.dump(report, f, indent=2, ensure_ascii=False)
     
-    print(f"
-報告已保存: {report_file}")
+    print(f"\n報告已保存: {report_file}")
