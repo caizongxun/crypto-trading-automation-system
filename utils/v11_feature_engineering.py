@@ -50,15 +50,21 @@ def create_v11_features(df: pd.DataFrame, feature_config: dict) -> pd.DataFrame:
     
     # 4. 反轉特徵 (核心!)
     if feature_config.get('reversal', True):
-        features.extend([
+        # 確保這些欄位存在
+        reversal_features = [
             'rsi', 'rsi_bullish_div', 'rsi_bearish_div',
             'macd', 'macd_signal', 'macd_hist',
             'macd_bullish_cross', 'macd_bearish_cross',
-            'bb_high', 'bb_low', 'bb_width',
+            'bb_high', 'bb_mid', 'bb_low', 'bb_width',
             'bb_bounce_up', 'bb_bounce_down',
             'volume_bullish_div', 'volume_bearish_div',
             'near_support', 'near_resistance'
-        ])
+        ]
+        
+        # 只添加存在的特徵
+        for feat in reversal_features:
+            if feat in df.columns:
+                features.append(feat)
     
     # 5. 型態特徵
     if feature_config.get('pattern', True):
@@ -69,7 +75,7 @@ def create_v11_features(df: pd.DataFrame, feature_config: dict) -> pd.DataFrame:
             'three_consecutive_up', 'three_consecutive_down'
         ])
     
-    # 在 ZigZag 特徵
+    # ZigZag 特徵
     df['has_pivot'] = df['pivot_type'].notna().astype(int)
     df['is_high_pivot'] = (df['pivot_type'] == 'high').astype(int)
     df['is_low_pivot'] = (df['pivot_type'] == 'low').astype(int)
@@ -77,8 +83,11 @@ def create_v11_features(df: pd.DataFrame, feature_config: dict) -> pd.DataFrame:
     
     features.extend(['has_pivot', 'is_high_pivot', 'is_low_pivot', 'pivot_swing_pct'])
     
+    # 過濾出實際存在的特徵
+    valid_features = [f for f in features if f in df.columns]
+    
     # 儲存特徵列表
-    df.attrs['feature_columns'] = features
+    df.attrs['feature_columns'] = valid_features
     
     return df
 
@@ -134,11 +143,11 @@ def add_trend_features(df: pd.DataFrame) -> pd.DataFrame:
 
 def add_pattern_features(df: pd.DataFrame) -> pd.DataFrame:
     """
-K線型態
+    K線型態
     """
     
     # Doji
-    df['doji'] = (abs(df['close'] - df['open']) / (df['high'] - df['low']) < 0.1).astype(int)
+    df['doji'] = (abs(df['close'] - df['open']) / (df['high'] - df['low'] + 0.0001) < 0.1).astype(int)
     
     # Hammer
     df['hammer'] = (
