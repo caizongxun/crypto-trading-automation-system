@@ -41,6 +41,13 @@ try:
 except ImportError:
     V3_AVAILABLE = False
 
+# 試圖載入 V11 標籤
+try:
+    from tabs.model_training_v11_tab import ModelTrainingV11Tab
+    V11_AVAILABLE = True
+except ImportError:
+    V11_AVAILABLE = False
+
 # Setup logger
 logger = setup_logger('main', 'logs/main.log')
 
@@ -68,7 +75,7 @@ def main():
         if V2_AVAILABLE:
             version_options.append("V2 - 進階版 (44-54特徵)")
         if V3_AVAILABLE:
-            version_options.append("V3 - 優化版 (30特徵) [NEW]")
+            version_options.append("V3 - 優化版 (30特徵)")
         if CHRONOS_AVAILABLE:
             version_options.append("Chronos - 時間序列 [AI]")
         if V10_AVAILABLE:
@@ -153,7 +160,7 @@ def main():
             st.session_state.system_version = 'v3'
             st.success("V3 優化系統已啟用")
             
-            # V3 特性說明
+            # V3/V11 特性說明
             with st.expander("V3 新特性"):
                 st.markdown("""
                 **核心改進**
@@ -174,6 +181,27 @@ def main():
                 """)
                 
                 st.info("[完整文檔](V3_MODEL_GUIDE.md)")
+            
+            # V11 特性說明
+            if V11_AVAILABLE:
+                with st.expander("🔶 V11 ZigZag 反轉 [NEW]"):
+                    st.markdown("""
+                    **V11 核心特色**
+                    - 🔶 ZigZag 反轉點識別
+                    - 📊 RSI/MACD/BB 多重確認
+                    - ⏱️ 提前 N 根預警
+                    - 🎯 動態 TP/SL (RR 3:1)
+                    
+                    **預期效果 (1h, 90天)**
+                    - 交易數: 100-200
+                    - 標籤率: 10-20%
+                    - 勝率: 50-60%
+                    - 持倉: 2-6 小時
+                    
+                    **適合市場**: 波段交易
+                    """)
+                    
+                    st.info("📖 [V11 完整文檔](V11_README.md)")
         
         elif "V2" in system_version:
             st.session_state.system_version = 'v2'
@@ -188,8 +216,8 @@ def main():
                 - 回測無交易或極少交易
                 
                 **建議**
-                - 使用 V3, Chronos 或 V10 替代
-                - V3/Chronos/V10 已修復所有問題
+                - 使用 V3, V11, Chronos 或 V10 替代
+                - V3/V11/Chronos/V10 已修復所有問題
                 
                 [詳細對比](V1_V2_V3_COMPARISON.md)
                 """)
@@ -209,7 +237,7 @@ def main():
                 - 勝率: 35-40%
                 - Profit Factor: 1.0-1.3
                 
-                **建議**: 升級到 V3, Chronos 或 V10
+                **建議**: 升級到 V3, V11, Chronos 或 V10
                 """)
         
         st.markdown("---")
@@ -227,19 +255,27 @@ def main():
             v3_long = list(models_dir.glob("catboost_long_v3_*.pkl"))
             v3_short = list(models_dir.glob("catboost_short_v3_*.pkl"))
             v10_model = list(models_dir.glob("v10_*_scalping_*.h5"))
+            v11_long = list(models_dir.glob("v11_long_*.pkl"))
+            v11_short = list(models_dir.glob("v11_short_*.pkl"))
             
             col1, col2 = st.columns(2)
             with col1:
                 st.metric("V1 Long", len(v1_long))
                 st.metric("V2 Long", len(v2_long))
                 st.metric("V3 Long", len(v3_long), delta="新" if len(v3_long) > 0 else None)
+                if V11_AVAILABLE:
+                    st.metric("V11 Long", len(v11_long), delta="🔶" if len(v11_long) > 0 else None)
             with col2:
                 st.metric("V1 Short", len(v1_short))
                 st.metric("V2 Short", len(v2_short))
                 st.metric("V3 Short", len(v3_short), delta="新" if len(v3_short) > 0 else None)
+                if V11_AVAILABLE:
+                    st.metric("V11 Short", len(v11_short), delta="🔶" if len(v11_short) > 0 else None)
         
         if V10_AVAILABLE:
             st.success("🔥 V10 剝頭皮已安裝")
+        if V11_AVAILABLE:
+            st.success("🔶 V11 ZigZag 已安裝")
         if CHRONOS_AVAILABLE:
             st.success("🌟 Chronos 已安裝")
         
@@ -249,6 +285,7 @@ def main():
         st.subheader("文檔")
         st.markdown("""
         **新功能**
+        - [🔶 V11 ZigZag 反轉](V11_README.md)
         - [🔥 V10 剝頭皮策略](backtest_results/v10_detailed/)
         - [🌟 Chronos 整合](docs/CHRONOS_INTEGRATION.md)
         
@@ -300,54 +337,112 @@ def main():
         chronos_backtest_tab.render()
     
     elif version == 'v3' and V3_AVAILABLE:
-        # V3 版本 - 8 個標籤
-        tab1, tab2, tab3_v1, tab3_v2, tab3_v3, tab4, tab5, tab6 = st.tabs([
-            "K棒資料抽取",
-            "特徵工程",
-            "V1 模型訓練",
-            "V2 模型訓練",
-            "V3 模型訓練",
-            "策略回測",
-            "自動交易",
-            "模型管理"
-        ])
+        # V3 版本 - 增加 V11 Tab
+        if V11_AVAILABLE:
+            # 有 V11: 9 個標籤
+            tab1, tab2, tab3_v1, tab3_v2, tab3_v3, tab3_v11, tab4, tab5, tab6 = st.tabs([
+                "K棒資料抽取",
+                "特徵工程",
+                "V1 模型訓練",
+                "V2 模型訓練",
+                "V3 模型訓練",
+                "🔶 V11 ZigZag",
+                "策略回測",
+                "自動交易",
+                "模型管理"
+            ])
+            
+            with tab1:
+                logger.info("Loading Data Fetcher Tab")
+                DataFetcherTab().render()
+            
+            with tab2:
+                logger.info("Loading Feature Engineering Tab")
+                FeatureEngineeringTab().render()
+            
+            with tab3_v1:
+                logger.info("Loading V1 Model Training Tab")
+                st.info("V1 模型訓練 (9 個特徵)")
+                ModelTrainingTab().render()
+            
+            with tab3_v2:
+                logger.info("Loading V2 Model Training Tab")
+                if V2_AVAILABLE:
+                    st.warning("V2 有已知問題,建議使用 V3 或 V11")
+                    ModelTrainingV2Tab().render()
+                else:
+                    st.error("V2 模組未安裝")
+            
+            with tab3_v3:
+                logger.info("Loading V3 Model Training Tab")
+                ModelTrainingV3Tab().render()
+            
+            with tab3_v11:
+                logger.info("Loading V11 Model Training Tab")
+                st.success("🔶 V11 ZigZag 反轉點交易 - 專注波段捕捉")
+                ModelTrainingV11Tab().render()
+            
+            with tab4:
+                logger.info("Loading Backtesting Tab")
+                BacktestingTab().render()
+            
+            with tab5:
+                logger.info("Loading Auto Trading Tab")
+                AutoTradingTab().render()
+            
+            with tab6:
+                logger.info("Loading Model Management Tab")
+                ModelManagementTab().render()
         
-        with tab1:
-            logger.info("Loading Data Fetcher Tab")
-            DataFetcherTab().render()
-        
-        with tab2:
-            logger.info("Loading Feature Engineering Tab")
-            FeatureEngineeringTab().render()
-        
-        with tab3_v1:
-            logger.info("Loading V1 Model Training Tab")
-            st.info("V1 模型訓練 (9 個特徵)")
-            ModelTrainingTab().render()
-        
-        with tab3_v2:
-            logger.info("Loading V2 Model Training Tab")
-            if V2_AVAILABLE:
-                st.warning("V2 有已知問題,建議使用 V3")
-                ModelTrainingV2Tab().render()
-            else:
-                st.error("V2 模組未安裝")
-        
-        with tab3_v3:
-            logger.info("Loading V3 Model Training Tab")
-            ModelTrainingV3Tab().render()
-        
-        with tab4:
-            logger.info("Loading Backtesting Tab")
-            BacktestingTab().render()
-        
-        with tab5:
-            logger.info("Loading Auto Trading Tab")
-            AutoTradingTab().render()
-        
-        with tab6:
-            logger.info("Loading Model Management Tab")
-            ModelManagementTab().render()
+        else:
+            # 沒有 V11: 8 個標籤 (原版)
+            tab1, tab2, tab3_v1, tab3_v2, tab3_v3, tab4, tab5, tab6 = st.tabs([
+                "K棒資料抽取",
+                "特徵工程",
+                "V1 模型訓練",
+                "V2 模型訓練",
+                "V3 模型訓練",
+                "策略回測",
+                "自動交易",
+                "模型管理"
+            ])
+            
+            with tab1:
+                logger.info("Loading Data Fetcher Tab")
+                DataFetcherTab().render()
+            
+            with tab2:
+                logger.info("Loading Feature Engineering Tab")
+                FeatureEngineeringTab().render()
+            
+            with tab3_v1:
+                logger.info("Loading V1 Model Training Tab")
+                st.info("V1 模型訓練 (9 個特徵)")
+                ModelTrainingTab().render()
+            
+            with tab3_v2:
+                logger.info("Loading V2 Model Training Tab")
+                if V2_AVAILABLE:
+                    st.warning("V2 有已知問題,建議使用 V3")
+                    ModelTrainingV2Tab().render()
+                else:
+                    st.error("V2 模組未安裝")
+            
+            with tab3_v3:
+                logger.info("Loading V3 Model Training Tab")
+                ModelTrainingV3Tab().render()
+            
+            with tab4:
+                logger.info("Loading Backtesting Tab")
+                BacktestingTab().render()
+            
+            with tab5:
+                logger.info("Loading Auto Trading Tab")
+                AutoTradingTab().render()
+            
+            with tab6:
+                logger.info("Loading Model Management Tab")
+                ModelManagementTab().render()
     
     elif version == 'v2' and V2_AVAILABLE:
         # V2 版本 - 7 個標籤
