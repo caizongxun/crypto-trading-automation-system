@@ -1,1 +1,289 @@
-"""\nBacktest Engine\n回測引擎 - 從Binance API獲取最新數據進行回測\n"""\nimport pandas as pd\nimport numpy as np\nfrom datetime import datetime, timedelta\nfrom typing import Dict, List, Optional\nimport requests\nfrom pathlib import Path\n\nclass BacktestEngine:\n    def __init__(self, config: dict):\n        self.initial_capital = config.get('initial_capital', 10)\n        self.leverage = config.get('leverage', 3)\n        self.maker_fee = config.get('maker_fee', 0.0002)\n        self.taker_fee = config.get('taker_fee', 0.0004)\n        self.slippage = config.get('slippage', 0.0001)\n        \n        self.trades = []\n        self.equity_curve = []\n        \n    def fetch_latest_data(self, symbol: str, interval: str, days: int = 30) -> pd.DataFrame:\n        \"\"\"\u5f9eBinance API\u7372\u53d6\u6700\u65b0\u6578\u64da\"\"\"\n        url = \"https://api.binance.com/api/v3/klines\"\n        \n        end_time = int(datetime.now().timestamp() * 1000)\n        start_time = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)\n        \n        params = {\n            'symbol': symbol,\n            'interval': interval,\n            'startTime': start_time,\n            'endTime': end_time,\n            'limit': 1000\n        }\n        \n        try:\n            print(f'\u6b63\u5728\u5f9eBinance\u7372\u53d6 {symbol} {interval} \u6700\u65b0\u6578\u64da...')\n            response = requests.get(url, params=params)\n            response.raise_for_status()\n            \n            data = response.json()\n            \n            df = pd.DataFrame(data, columns=[\n                'open_time', 'open', 'high', 'low', 'close', 'volume',\n                'close_time', 'quote_asset_volume', 'number_of_trades',\n                'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'\n            ])\n            \n            df['open_time'] = pd.to_datetime(df['open_time'], unit='ms', utc=True)\n            df['close_time'] = pd.to_datetime(df['close_time'], unit='ms', utc=True)\n            \n            for col in ['open', 'high', 'low', 'close', 'volume']:\n                df[col] = df[col].astype(float)\n            \n            print(f'\u6210\u529f\u7372\u53d6 {len(df)} \u7b46\u6700\u65b0\u6578\u64da')\n            print(f'\u6642\u9593\u7bc4\u570d: {df[\"open_time\"].iloc[0]} \u81f3 {df[\"open_time\"].iloc[-1]}')\n            \n            return df\n            \n        except Exception as e:\n            print(f'\u7372\u53d6\u6578\u64da\u5931\u6557: {str(e)}')\n            return pd.DataFrame()\n    \n    def run_backtest(self, \n                    df: pd.DataFrame,\n                    min_signal_strength: int = 2,\n                    min_confidence: float = 0.6) -> Dict:\n        \"\"\"\u57f7\u884c\u56de\u6e2c\"\"\"\n        self.trades = []\n        self.equity_curve = []\n        \n        capital = self.initial_capital\n        position = None\n        \n        for i in range(len(df)):\n            row = df.iloc[i]\n            \n            current_equity = capital\n            if position is not None:\n                unrealized_pnl = self._calculate_unrealized_pnl(position, row['close'])\n                current_equity += unrealized_pnl\n            \n            self.equity_curve.append({\n                'time': row['open_time'],\n                'equity': current_equity,\n                'position': position['type'] if position else 'NONE'\n            })\n            \n            if position is not None:\n                exit_reason = None\n                exit_price = None\n                \n                if position['type'] == 'LONG':\n                    if row['low'] <= position['sl']:\n                        exit_reason = 'STOP_LOSS'\n                        exit_price = position['sl']\n                    elif row['high'] >= position['tp']:\n                        exit_reason = 'TAKE_PROFIT'\n                        exit_price = position['tp']\n                \n                else:\n                    if row['high'] >= position['sl']:\n                        exit_reason = 'STOP_LOSS'\n                        exit_price = position['sl']\n                    elif row['low'] <= position['tp']:\n                        exit_reason = 'TAKE_PROFIT'\n                        exit_price = position['tp']\n                \n                if exit_reason:\n                    pnl = self._close_position(position, exit_price, exit_reason, row['open_time'])\n                    capital += pnl\n                    position = None\n            \n            if position is None:\n                if (row.get('signal_long', 0) == 1 and \n                    row.get('pred_long_valid', 0) == 1 and\n                    row.get('signal_strength_long', 0) >= min_signal_strength and\n                    row.get('pred_long_proba', 0) >= min_confidence):\n                    \n                    position = self._open_position(\n                        'LONG', \n                        row['close'], \n                        row.get('stop_loss', row['close'] * 0.995),\n                        row.get('take_profit', row['close'] * 1.015),\n                        capital,\n                        row['open_time']\n                    )\n                \n                elif (row.get('signal_short', 0) == 1 and \n                      row.get('pred_short_valid', 0) == 1 and\n                      row.get('signal_strength_short', 0) >= min_signal_strength and\n                      row.get('pred_short_proba', 0) >= min_confidence):\n                    \n                    position = self._open_position(\n                        'SHORT',\n                        row['close'],\n                        row.get('stop_loss', row['close'] * 1.005),\n                        row.get('take_profit', row['close'] * 0.985),\n                        capital,\n                        row['open_time']\n                    )\n        \n        return self._calculate_statistics(capital)\n    \n    def _open_position(self, direction: str, entry_price: float, \n                       sl: float, tp: float, capital: float, time) -> Dict:\n        \"\"\"\u958b\u5009\"\"\"\n        margin = capital * 0.95\n        position_size = (margin * self.leverage) / entry_price\n        \n        if direction == 'LONG':\n            entry_price = entry_price * (1 + self.slippage)\n        else:\n            entry_price = entry_price * (1 - self.slippage)\n        \n        fee = position_size * entry_price * self.taker_fee\n        \n        position = {\n            'type': direction,\n            'entry_price': entry_price,\n            'entry_time': time,\n            'size': position_size,\n            'sl': sl,\n            'tp': tp,\n            'fee': fee,\n            'margin': margin\n        }\n        \n        print(f\"{time} \u958b\u5009 {direction} @ {entry_price:.2f} | \u5009\u4f4d: {position_size:.4f} | SL: {sl:.2f} | TP: {tp:.2f}\")\n        \n        return position\n    \n    def _close_position(self, position: Dict, exit_price: float, reason: str, time) -> float:\n        \"\"\"\u5e73\u5009\u4e26\u8fd4\u56de\u76c8\u8667\"\"\"\n        if position['type'] == 'LONG':\n            exit_price = exit_price * (1 - self.slippage)\n        else:\n            exit_price = exit_price * (1 + self.slippage)\n        \n        if position['type'] == 'LONG':\n            price_change = (exit_price - position['entry_price']) / position['entry_price']\n        else:\n            price_change = (position['entry_price'] - exit_price) / position['entry_price']\n        \n        gross_pnl = position['margin'] * price_change * self.leverage\n        exit_fee = position['size'] * exit_price * self.taker_fee\n        net_pnl = gross_pnl - position['fee'] - exit_fee\n        \n        trade = {\n            'entry_time': position['entry_time'],\n            'exit_time': time,\n            'type': position['type'],\n            'entry_price': position['entry_price'],\n            'exit_price': exit_price,\n            'size': position['size'],\n            'pnl': net_pnl,\n            'return_pct': (net_pnl / position['margin']) * 100,\n            'reason': reason,\n            'fees': position['fee'] + exit_fee\n        }\n        \n        self.trades.append(trade)\n        \n        print(f\"{time} \u5e73\u5009 {position['type']} @ {exit_price:.2f} | \u539f\u56e0: {reason} | \u76c8\u8667: {net_pnl:.2f} USDT ({trade['return_pct']:.2f}%)\")\n        \n        return net_pnl\n    \n    def _calculate_unrealized_pnl(self, position: Dict, current_price: float) -> float:\n        \"\"\"\u8a08\u7b97\u6d6e\u52d5\u76c8\u8667\"\"\"\n        if position['type'] == 'LONG':\n            price_change = (current_price - position['entry_price']) / position['entry_price']\n        else:\n            price_change = (position['entry_price'] - current_price) / position['entry_price']\n        \n        unrealized_pnl = position['margin'] * price_change * self.leverage - position['fee']\n        return unrealized_pnl\n    \n    def _calculate_statistics(self, final_capital: float) -> Dict:\n        \"\"\"\u8a08\u7b97\u56de\u6e2c\u7d71\u8a08\u6578\u64da\"\"\"\n        if not self.trades:\n            return {'error': '\u7121\u4ea4\u6613\u8a18\u9304'}\n        \n        df_trades = pd.DataFrame(self.trades)\n        df_equity = pd.DataFrame(self.equity_curve)\n        \n        total_trades = len(df_trades)\n        winning_trades = len(df_trades[df_trades['pnl'] > 0])\n        losing_trades = len(df_trades[df_trades['pnl'] < 0])\n        \n        win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0\n        \n        total_pnl = df_trades['pnl'].sum()\n        total_return = ((final_capital - self.initial_capital) / self.initial_capital) * 100\n        \n        avg_win = df_trades[df_trades['pnl'] > 0]['pnl'].mean() if winning_trades > 0 else 0\n        avg_loss = df_trades[df_trades['pnl'] < 0]['pnl'].mean() if losing_trades > 0 else 0\n        \n        df_equity['cummax'] = df_equity['equity'].cummax()\n        df_equity['drawdown'] = (df_equity['equity'] - df_equity['cummax']) / df_equity['cummax'] * 100\n        max_drawdown = df_equity['drawdown'].min()\n        \n        returns = df_trades['return_pct'].values\n        sharpe = (returns.mean() / returns.std() * np.sqrt(252)) if len(returns) > 1 and returns.std() > 0 else 0\n        \n        return {\n            'initial_capital': self.initial_capital,\n            'final_capital': final_capital,\n            'total_return': total_return,\n            'total_pnl': total_pnl,\n            'total_trades': total_trades,\n            'winning_trades': winning_trades,\n            'losing_trades': losing_trades,\n            'win_rate': win_rate,\n            'avg_win': avg_win,\n            'avg_loss': avg_loss,\n            'profit_factor': abs(avg_win / avg_loss) if avg_loss != 0 else 0,\n            'max_drawdown': max_drawdown,\n            'sharpe_ratio': sharpe,\n            'trades': df_trades.to_dict('records'),\n            'equity_curve': df_equity.to_dict('records')\n        }\n
+"""
+Backtest Engine
+回測引擎
+"""
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+from typing import Dict, List
+import requests
+
+class BacktestEngine:
+    def __init__(self, config: dict):
+        self.initial_capital = config.get('initial_capital', 10)
+        self.leverage = config.get('leverage', 3)
+        self.maker_fee = config.get('maker_fee', 0.0002)
+        self.taker_fee = config.get('taker_fee', 0.0004)
+        self.slippage = config.get('slippage', 0.0001)
+    
+    def fetch_latest_data(self, symbol: str, timeframe: str, days: int = 30) -> pd.DataFrame:
+        """從Binance API獲取最新數據"""
+        
+        interval_map = {
+            '15m': '15m',
+            '1h': '1h',
+            '4h': '4h'
+        }
+        
+        interval = interval_map.get(timeframe, '15m')
+        
+        end_time = datetime.now()
+        start_time = end_time - timedelta(days=days)
+        
+        start_ms = int(start_time.timestamp() * 1000)
+        end_ms = int(end_time.timestamp() * 1000)
+        
+        url = 'https://api.binance.com/api/v3/klines'
+        
+        all_data = []
+        current_start = start_ms
+        
+        print(f"正在從Binance獲取 {symbol} {timeframe} 最近 {days} 天的數據...")
+        
+        while current_start < end_ms:
+            params = {
+                'symbol': symbol,
+                'interval': interval,
+                'startTime': current_start,
+                'endTime': end_ms,
+                'limit': 1000
+            }
+            
+            try:
+                response = requests.get(url, params=params)
+                response.raise_for_status()
+                data = response.json()
+                
+                if not data:
+                    break
+                
+                all_data.extend(data)
+                current_start = data[-1][0] + 1
+                
+                if len(data) < 1000:
+                    break
+                    
+            except Exception as e:
+                print(f"獲取數據失敗: {str(e)}")
+                break
+        
+        if not all_data:
+            return pd.DataFrame()
+        
+        df = pd.DataFrame(all_data, columns=[
+            'timestamp', 'open', 'high', 'low', 'close', 'volume',
+            'close_time', 'quote_volume', 'trades', 'taker_buy_base',
+            'taker_buy_quote', 'ignore'
+        ])
+        
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        for col in ['open', 'high', 'low', 'close', 'volume']:
+            df[col] = df[col].astype(float)
+        
+        df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
+        
+        print(f"成功獲取 {len(df)} 筆數據")
+        
+        return df
+    
+    def run_backtest(self, df: pd.DataFrame, min_signal_strength: int = 2, 
+                    min_confidence: float = 0.6) -> Dict:
+        """執行回測"""
+        
+        capital = self.initial_capital
+        position = None
+        trades = []
+        equity_curve = [{'time': df.iloc[0]['timestamp'], 'equity': capital}]
+        
+        for i in range(len(df)):
+            row = df.iloc[i]
+            current_price = row['close']
+            current_time = row['timestamp']
+            
+            if position is not None:
+                if position['type'] == 'LONG':
+                    if current_price <= position['stop_loss']:
+                        exit_price = position['stop_loss'] * (1 - self.slippage)
+                        pnl = self._calculate_pnl(position, exit_price)
+                        capital += pnl
+                        
+                        trades.append({
+                            'entry_time': position['entry_time'],
+                            'exit_time': current_time,
+                            'type': 'LONG',
+                            'entry_price': position['entry_price'],
+                            'exit_price': exit_price,
+                            'size': position['size'],
+                            'pnl': pnl,
+                            'return_pct': (pnl / position['margin']) * 100,
+                            'reason': 'stop_loss'
+                        })
+                        position = None
+                        
+                    elif current_price >= position['take_profit']:
+                        exit_price = position['take_profit'] * (1 + self.slippage)
+                        pnl = self._calculate_pnl(position, exit_price)
+                        capital += pnl
+                        
+                        trades.append({
+                            'entry_time': position['entry_time'],
+                            'exit_time': current_time,
+                            'type': 'LONG',
+                            'entry_price': position['entry_price'],
+                            'exit_price': exit_price,
+                            'size': position['size'],
+                            'pnl': pnl,
+                            'return_pct': (pnl / position['margin']) * 100,
+                            'reason': 'take_profit'
+                        })
+                        position = None
+                
+                elif position['type'] == 'SHORT':
+                    if current_price >= position['stop_loss']:
+                        exit_price = position['stop_loss'] * (1 + self.slippage)
+                        pnl = self._calculate_pnl(position, exit_price)
+                        capital += pnl
+                        
+                        trades.append({
+                            'entry_time': position['entry_time'],
+                            'exit_time': current_time,
+                            'type': 'SHORT',
+                            'entry_price': position['entry_price'],
+                            'exit_price': exit_price,
+                            'size': position['size'],
+                            'pnl': pnl,
+                            'return_pct': (pnl / position['margin']) * 100,
+                            'reason': 'stop_loss'
+                        })
+                        position = None
+                        
+                    elif current_price <= position['take_profit']:
+                        exit_price = position['take_profit'] * (1 - self.slippage)
+                        pnl = self._calculate_pnl(position, exit_price)
+                        capital += pnl
+                        
+                        trades.append({
+                            'entry_time': position['entry_time'],
+                            'exit_time': current_time,
+                            'type': 'SHORT',
+                            'entry_price': position['entry_price'],
+                            'exit_price': exit_price,
+                            'size': position['size'],
+                            'pnl': pnl,
+                            'return_pct': (pnl / position['margin']) * 100,
+                            'reason': 'take_profit'
+                        })
+                        position = None
+            
+            if position is None:
+                if (row.get('signal_long', 0) == 1 and 
+                    row.get('pred_long_valid', 0) == 1 and
+                    row.get('signal_strength_long', 0) >= min_signal_strength and
+                    row.get('pred_long_confidence', 0) >= min_confidence):
+                    
+                    entry_price = current_price * (1 + self.slippage)
+                    position_value = capital * self.leverage
+                    position_size = position_value / entry_price
+                    margin = capital
+                    fee = position_value * self.taker_fee
+                    capital -= fee
+                    
+                    position = {
+                        'type': 'LONG',
+                        'entry_time': current_time,
+                        'entry_price': entry_price,
+                        'size': position_size,
+                        'margin': margin,
+                        'stop_loss': row.get('stop_loss', entry_price * 0.99),
+                        'take_profit': row.get('take_profit', entry_price * 1.02)
+                    }
+                
+                elif (row.get('signal_short', 0) == 1 and 
+                      row.get('pred_short_valid', 0) == 1 and
+                      row.get('signal_strength_short', 0) >= min_signal_strength and
+                      row.get('pred_short_confidence', 0) >= min_confidence):
+                    
+                    entry_price = current_price * (1 - self.slippage)
+                    position_value = capital * self.leverage
+                    position_size = position_value / entry_price
+                    margin = capital
+                    fee = position_value * self.taker_fee
+                    capital -= fee
+                    
+                    position = {
+                        'type': 'SHORT',
+                        'entry_time': current_time,
+                        'entry_price': entry_price,
+                        'size': position_size,
+                        'margin': margin,
+                        'stop_loss': row.get('stop_loss', entry_price * 1.01),
+                        'take_profit': row.get('take_profit', entry_price * 0.98)
+                    }
+            
+            equity_curve.append({'time': current_time, 'equity': capital})
+        
+        if len(trades) == 0:
+            return {'error': '無交易產生'}
+        
+        results = self._calculate_metrics(trades, equity_curve)
+        results['trades'] = trades
+        results['equity_curve'] = equity_curve
+        
+        return results
+    
+    def _calculate_pnl(self, position: Dict, exit_price: float) -> float:
+        """計算盈虧"""
+        if position['type'] == 'LONG':
+            price_change = exit_price - position['entry_price']
+        else:
+            price_change = position['entry_price'] - exit_price
+        
+        pnl = price_change * position['size']
+        fee = exit_price * position['size'] * self.taker_fee
+        
+        return pnl - fee
+    
+    def _calculate_metrics(self, trades: List[Dict], equity_curve: List[Dict]) -> Dict:
+        """計算績效指標"""
+        trades_df = pd.DataFrame(trades)
+        
+        total_trades = len(trades_df)
+        winning_trades = len(trades_df[trades_df['pnl'] > 0])
+        losing_trades = len(trades_df[trades_df['pnl'] <= 0])
+        
+        win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
+        
+        total_pnl = trades_df['pnl'].sum()
+        avg_win = trades_df[trades_df['pnl'] > 0]['pnl'].mean() if winning_trades > 0 else 0
+        avg_loss = trades_df[trades_df['pnl'] <= 0]['pnl'].mean() if losing_trades > 0 else 0
+        
+        total_win = trades_df[trades_df['pnl'] > 0]['pnl'].sum()
+        total_loss = abs(trades_df[trades_df['pnl'] <= 0]['pnl'].sum())
+        profit_factor = (total_win / total_loss) if total_loss > 0 else 0
+        
+        equity_df = pd.DataFrame(equity_curve)
+        final_capital = equity_df['equity'].iloc[-1]
+        total_return = ((final_capital - self.initial_capital) / self.initial_capital) * 100
+        
+        equity_df['cummax'] = equity_df['equity'].cummax()
+        equity_df['drawdown'] = (equity_df['equity'] - equity_df['cummax']) / equity_df['cummax']
+        max_drawdown = equity_df['drawdown'].min() * 100
+        
+        returns = equity_df['equity'].pct_change().dropna()
+        sharpe_ratio = (returns.mean() / returns.std() * np.sqrt(252)) if returns.std() > 0 else 0
+        
+        return {
+            'initial_capital': self.initial_capital,
+            'final_capital': final_capital,
+            'total_pnl': total_pnl,
+            'total_return': total_return,
+            'total_trades': total_trades,
+            'winning_trades': winning_trades,
+            'losing_trades': losing_trades,
+            'win_rate': win_rate,
+            'avg_win': avg_win,
+            'avg_loss': avg_loss,
+            'profit_factor': profit_factor,
+            'max_drawdown': max_drawdown,
+            'sharpe_ratio': sharpe_ratio
+        }

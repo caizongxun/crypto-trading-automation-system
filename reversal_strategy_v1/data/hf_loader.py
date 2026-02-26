@@ -1,1 +1,70 @@
-"""\nHuggingFace Dataset Loader\n從HuggingFace加載加密貨幣K線數據\n"""\nfrom huggingface_hub import hf_hub_download\nimport pandas as pd\nfrom pathlib import Path\nfrom typing import Optional\nimport os\n\nclass HFDataLoader:\n    def __init__(self, repo_id: str = \"zongowo111/v2-crypto-ohlcv-data\"):\n        self.repo_id = repo_id\n        self.cache_dir = Path(\"data/cache\")\n        self.cache_dir.mkdir(parents=True, exist_ok=True)\n        \n    def load_klines(self, symbol: str, timeframe: str) -> pd.DataFrame:\n        \"\"\"\u52a0\u8f09K\u7dda\u6578\u64da\"\"\"\n        base = symbol.replace(\"USDT\", \"\")\n        filename = f\"{base}_{timeframe}.parquet\"\n        path_in_repo = f\"klines/{symbol}/{filename}\"\n        \n        try:\n            local_path = hf_hub_download(\n                repo_id=self.repo_id,\n                filename=path_in_repo,\n                repo_type=\"dataset\",\n                cache_dir=str(self.cache_dir)\n            )\n            \n            df = pd.read_parquet(local_path)\n            \n            if 'open_time' in df.columns:\n                df['open_time'] = pd.to_datetime(df['open_time'], utc=True)\n            if 'close_time' in df.columns:\n                df['close_time'] = pd.to_datetime(df['close_time'], utc=True)\n            \n            df = df.sort_values('open_time').reset_index(drop=True)\n            \n            print(f'\u6210\u529f\u52a0\u8f09 {symbol} {timeframe}: {len(df)} \u7b46\u6578\u64da')\n            print(f'\u6642\u9593\u7bc4\u570d: {df[\"open_time\"].iloc[0]} \u81f3 {df[\"open_time\"].iloc[-1]}')\n            \n            return df\n            \n        except Exception as e:\n            print(f'\u52a0\u8f09\u6578\u64da\u5931\u6557: {symbol} {timeframe}')\n            print(f'\u932f\u8aa4: {str(e)}')\n            return pd.DataFrame()\n    \n    def get_available_symbols(self) -> list:\n        \"\"\"\u7372\u53d6\u6240\u6709\u53ef\u7528\u7684\u4ea4\u6613\u5c0d\"\"\"\n        symbols = [\n            'AAVEUSDT', 'ADAUSDT', 'ALGOUSDT', 'ARBUSDT', 'ATOMUSDT',\n            'AVAXUSDT', 'BALUSDT', 'BATUSDT', 'BCHUSDT', 'BNBUSDT',\n            'BTCUSDT', 'COMPUSDT', 'CRVUSDT', 'DOGEUSDT', 'DOTUSDT',\n            'ENJUSDT', 'ENSUSDT', 'ETCUSDT', 'ETHUSDT', 'FILUSDT',\n            'GALAUSDT', 'GRTUSDT', 'IMXUSDT', 'KAVAUSDT', 'LINKUSDT',\n            'LTCUSDT', 'MANAUSDT', 'MATICUSDT', 'MKRUSDT', 'NEARUSDT',\n            'OPUSDT', 'SANDUSDT', 'SNXUSDT', 'SOLUSDT', 'SPELLUSDT',\n            'UNIUSDT', 'XRPUSDT', 'ZRXUSDT'\n        ]\n        return symbols\n    \n    def get_available_timeframes(self) -> list:\n        \"\"\"\u7372\u53d6\u6240\u6709\u53ef\u7528\u7684\u6642\u9593\u6846\u67b6\"\"\"\n        return ['1m', '15m', '1h', '1d']\n    \n    def load_multiple_symbols(self, symbols: list, timeframe: str) -> dict:\n        \"\"\"\u6279\u91cf\u52a0\u8f09\u591a\u500b\u4ea4\u6613\u5c0d\"\"\"\n        data_dict = {}\n        for symbol in symbols:\n            df = self.load_klines(symbol, timeframe)\n            if not df.empty:\n                data_dict[symbol] = df\n        return data_dict\n
+"""
+HuggingFace Dataset Loader
+從HuggingFace加載加密貨幣歷史數據
+"""
+import pandas as pd
+from huggingface_hub import hf_hub_download
+import pyarrow.parquet as pq
+from pathlib import Path
+import os
+
+class HFDataLoader:
+    def __init__(self, repo_id: str = "zongowo111/v2-crypto-ohlcv-data"):
+        self.repo_id = repo_id
+        
+        self.available_symbols = [
+            'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT',
+            'ADAUSDT', 'DOGEUSDT', 'MATICUSDT', 'DOTUSDT', 'AVAXUSDT',
+            'UNIUSDT', 'LINKUSDT', 'ATOMUSDT', 'LTCUSDT', 'NEARUSDT',
+            'ALGOUSDT', 'VETUSDT', 'ICPUSDT', 'FILUSDT', 'HBARUSDT',
+            'APTUSDT', 'ARBUSDT', 'OPUSDT', 'INJUSDT', 'STXUSDT',
+            'TIAUSDT', 'SEIUSDT', 'PENDLEUSDT', 'WLDUSDT', 'TAOUSDT',
+            'AAVEUSDT', 'COMPUSDT', 'MKRUSDT', 'CRVUSDT', 'SNXUSDT',
+            'LDOUSDT', 'RNDRUSDT', 'SUSHIUSDT'
+        ]
+        
+        self.available_timeframes = ['15m', '1h', '4h']
+    
+    def load_klines(self, symbol: str, timeframe: str) -> pd.DataFrame:
+        """加載K線數據"""
+        
+        if symbol not in self.available_symbols:
+            print(f"警告: {symbol} 不在可用符號列表中")
+            return pd.DataFrame()
+        
+        if timeframe not in self.available_timeframes:
+            print(f"警告: {timeframe} 不在可用時間框架列表中")
+            return pd.DataFrame()
+        
+        try:
+            filename = f"{symbol}_{timeframe}.parquet"
+            
+            print(f"正在從HuggingFace下載: {filename}")
+            
+            file_path = hf_hub_download(
+                repo_id=self.repo_id,
+                filename=filename,
+                repo_type="dataset"
+            )
+            
+            df = pd.read_parquet(file_path)
+            
+            if 'timestamp' in df.columns:
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
+                df = df.sort_values('timestamp').reset_index(drop=True)
+            
+            print(f"成功加載 {len(df)} 筆數據")
+            
+            return df
+            
+        except Exception as e:
+            print(f"加載失敗: {str(e)}")
+            return pd.DataFrame()
+    
+    def get_available_symbols(self):
+        """獲取可用符號列表"""
+        return self.available_symbols
+    
+    def get_available_timeframes(self):
+        """獲取可用時間框架列表"""
+        return self.available_timeframes
