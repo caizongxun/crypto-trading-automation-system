@@ -284,7 +284,7 @@ def render_backtest_tab():
         )
         
         if data_source == "Binance API (最新)":
-            backtest_days = st.slider("回測天數", 7, 60, 30)
+            backtest_days = st.slider("回測天數", 7, 90, 30)
         else:
             backtest_days = st.slider("回測天數", 30, 365, 90)
         
@@ -294,9 +294,25 @@ def render_backtest_tab():
         st.markdown("---")
         
         st.subheader("交易參數")
-        min_signal_strength = st.slider("最小信號強度", 1, 5, 2)
-        min_confidence = st.slider("最小模型置信度", 0.5, 0.95, 0.6, 0.05)
         
+        st.caption("降低信號強度和置信度可增加交易數量")
+        min_signal_strength = st.slider("最小信號強度", 1, 5, 1, help="設為1可增加交易數量")
+        min_confidence = st.slider("最小模型置信度", 0.5, 0.95, 0.55, 0.05, help="降低可增加交易數量")
+        
+        st.markdown("---")
+        
+        st.subheader("倉位管理")
+        position_size_pct = st.slider("兩位大小 (%當前資金)", 10, 100, 95, 5, help="使用當前資金的百分比,實現複利效果") / 100
+        
+        st.markdown("---")
+        
+        st.subheader("風險管理 (ATR)")
+        atr_multiplier_sl = st.slider("ATR止損倍數", 0.5, 3.0, 1.5, 0.1, help="止損 = 當前ATR * 此倍數")
+        atr_multiplier_tp = st.slider("ATR止盈倍數", 1.0, 5.0, 3.0, 0.5, help="止盈 = 當前ATR * 此倍數")
+        
+        st.markdown("---")
+        
+        st.subheader("交易費用")
         maker_fee = st.number_input("Maker手續費 %", 0.01, 0.1, 0.02, 0.01) / 100
         taker_fee = st.number_input("Taker手續費 %", 0.01, 0.1, 0.04, 0.01) / 100
         
@@ -312,7 +328,10 @@ def render_backtest_tab():
                 'min_signal_strength': min_signal_strength,
                 'min_confidence': min_confidence,
                 'maker_fee': maker_fee,
-                'taker_fee': taker_fee
+                'taker_fee': taker_fee,
+                'position_size_pct': position_size_pct,
+                'atr_multiplier_sl': atr_multiplier_sl,
+                'atr_multiplier_tp': atr_multiplier_tp
             }
             st.session_state['backtest_started'] = True
     
@@ -339,7 +358,8 @@ def render_backtest_tab():
                             'leverage': params['leverage'],
                             'maker_fee': params['maker_fee'],
                             'taker_fee': params['taker_fee'],
-                            'slippage': 0.0001
+                            'slippage': 0.0001,
+                            'position_size_pct': params['position_size_pct']
                         })
                         df = backtest_engine.fetch_latest_data(symbol, timeframe, days=params['days'])
                     else:
@@ -362,14 +382,14 @@ def render_backtest_tab():
                     df = ml_predictor.predict(df)
                 
                 with st.spinner('計算風險參數...'):
-                    risk_manager = RiskManager(config.get('risk_management', {
+                    risk_manager = RiskManager({
                         'initial_capital': params['capital'],
                         'max_risk_per_trade': 0.02,
                         'max_leverage': 10,
                         'default_leverage': params['leverage'],
-                        'atr_multiplier_sl': 1.5,
-                        'atr_multiplier_tp': 3.0
-                    }))
+                        'atr_multiplier_sl': params['atr_multiplier_sl'],
+                        'atr_multiplier_tp': params['atr_multiplier_tp']
+                    })
                     
                     for i in range(len(df)):
                         if df.iloc[i]['signal_long'] == 1:
@@ -387,7 +407,8 @@ def render_backtest_tab():
                         'leverage': params['leverage'],
                         'maker_fee': params['maker_fee'],
                         'taker_fee': params['taker_fee'],
-                        'slippage': 0.0001
+                        'slippage': 0.0001,
+                        'position_size_pct': params['position_size_pct']
                     })
                     
                     results = backtest_engine.run_backtest(
