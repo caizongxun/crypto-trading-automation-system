@@ -1,1 +1,3 @@
-"""\nTrading Execution Modules\n"""\n
+"""
+Trading Execution Modules
+"""

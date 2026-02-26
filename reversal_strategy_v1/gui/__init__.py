@@ -1,1 +1,3 @@
-"""\nGUI Application\n"""\n
+"""
+GUI Application
+"""

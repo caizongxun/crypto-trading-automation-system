@@ -1,1 +1,20 @@
-"""\nReversal Strategy V1\nOrder Flow Imbalance & Liquidity Zone Based Reversal Trading Strategy\n"""\n\n__version__ = '1.0.0'\n__author__ = 'Zong'\n\nfrom .core import SignalDetector, FeatureEngineer, MLPredictor, RiskManager\nfrom .data import HFDataLoader\nfrom .backtest import BacktestEngine\n\n__all__ = [\n    'SignalDetector',\n    'FeatureEngineer', \n    'MLPredictor',\n    'RiskManager',\n    'HFDataLoader',\n    'BacktestEngine'\n]\n
+"""
+Reversal Strategy V1
+Order Flow Imbalance & Liquidity Zone Based Reversal Trading Strategy
+"""
+
+__version__ = '1.0.0'
+__author__ = 'Zong'
+
+from .core import SignalDetector, FeatureEngineer, MLPredictor, RiskManager
+from .data import HFDataLoader
+from .backtest import BacktestEngine
+
+__all__ = [
+    'SignalDetector',
+    'FeatureEngineer', 
+    'MLPredictor',
+    'RiskManager',
+    'HFDataLoader',
+    'BacktestEngine'
+]

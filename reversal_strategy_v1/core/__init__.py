@@ -1,1 +1,9 @@
-"""\nReversal Strategy V1 - Core Modules\n"""\nfrom .signal_detector import SignalDetector\nfrom .feature_engineer import FeatureEngineer\nfrom .ml_predictor import MLPredictor\nfrom .risk_manager import RiskManager\n\n__all__ = ['SignalDetector', 'FeatureEngineer', 'MLPredictor', 'RiskManager']\n
+"""
+Reversal Strategy V1 - Core Modules
+"""
+from .signal_detector import SignalDetector
+from .feature_engineer import FeatureEngineer
+from .ml_predictor import MLPredictor
+from .risk_manager import RiskManager
+
+__all__ = ['SignalDetector', 'FeatureEngineer', 'MLPredictor', 'RiskManager']

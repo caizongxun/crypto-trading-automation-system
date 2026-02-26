@@ -1,1 +1,6 @@
-"""\nData Loading Modules\n"""\nfrom .hf_loader import HFDataLoader\n\n__all__ = ['HFDataLoader']\n
+"""
+Data Loading Modules
+"""
+from .hf_loader import HFDataLoader
+
+__all__ = ['HFDataLoader']
