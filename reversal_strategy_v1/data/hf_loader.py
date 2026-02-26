@@ -13,17 +13,17 @@ class HFDataLoader:
         self.repo_id = repo_id
         
         self.available_symbols = [
-            'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT',
-            'ADAUSDT', 'DOGEUSDT', 'MATICUSDT', 'DOTUSDT', 'AVAXUSDT',
-            'UNIUSDT', 'LINKUSDT', 'ATOMUSDT', 'LTCUSDT', 'NEARUSDT',
-            'ALGOUSDT', 'VETUSDT', 'ICPUSDT', 'FILUSDT', 'HBARUSDT',
-            'APTUSDT', 'ARBUSDT', 'OPUSDT', 'INJUSDT', 'STXUSDT',
-            'TIAUSDT', 'SEIUSDT', 'PENDLEUSDT', 'WLDUSDT', 'TAOUSDT',
-            'AAVEUSDT', 'COMPUSDT', 'MKRUSDT', 'CRVUSDT', 'SNXUSDT',
-            'LDOUSDT', 'RNDRUSDT', 'SUSHIUSDT'
+            'AAVEUSDT', 'ADAUSDT', 'ALGOUSDT', 'ARBUSDT', 'ATOMUSDT',
+            'AVAXUSDT', 'BALUSDT', 'BATUSDT', 'BCHUSDT', 'BNBUSDT',
+            'BTCUSDT', 'COMPUSDT', 'CRVUSDT', 'DOGEUSDT', 'DOTUSDT',
+            'ENJUSDT', 'ENSUSDT', 'ETCUSDT', 'ETHUSDT', 'FILUSDT',
+            'GALAUSDT', 'GRTUSDT', 'IMXUSDT', 'KAVAUSDT', 'LINKUSDT',
+            'LTCUSDT', 'MANAUSDT', 'MATICUSDT', 'MKRUSDT', 'NEARUSDT',
+            'OPUSDT', 'SANDUSDT', 'SNXUSDT', 'SOLUSDT', 'SPELLUSDT',
+            'UNIUSDT', 'XRPUSDT', 'ZRXUSDT'
         ]
         
-        self.available_timeframes = ['15m', '1h', '4h']
+        self.available_timeframes = ['1m', '15m', '1h', '1d']
     
     def load_klines(self, symbol: str, timeframe: str) -> pd.DataFrame:
         """加載K線數據"""
@@ -37,28 +37,30 @@ class HFDataLoader:
             return pd.DataFrame()
         
         try:
-            filename = f"{symbol}_{timeframe}.parquet"
+            base = symbol.replace("USDT", "")
+            filename = f"{base}_{timeframe}.parquet"
+            path_in_repo = f"klines/{symbol}/{filename}"
             
-            print(f"正在從HuggingFace下載: {filename}")
+            print(f"正在從HuggingFace下載: {path_in_repo}")
             
-            file_path = hf_hub_download(
+            local_path = hf_hub_download(
                 repo_id=self.repo_id,
-                filename=filename,
+                filename=path_in_repo,
                 repo_type="dataset"
             )
             
-            df = pd.read_parquet(file_path)
+            df = pd.read_parquet(local_path)
             
             print(f"原始數據欄位: {df.columns.tolist()}")
             print(f"原始數據行數: {len(df)}")
             
             column_mapping = {
                 'open_time': 'timestamp',
-                'Open': 'open',
-                'High': 'high', 
-                'Low': 'low',
-                'Close': 'close',
-                'Volume': 'volume'
+                'open': 'open',
+                'high': 'high', 
+                'low': 'low',
+                'close': 'close',
+                'volume': 'volume'
             }
             
             df = df.rename(columns=column_mapping)
@@ -74,7 +76,7 @@ class HFDataLoader:
             
             if 'timestamp' in df.columns:
                 if not pd.api.types.is_datetime64_any_dtype(df['timestamp']):
-                    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms', errors='coerce')
+                    df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
                 df = df.sort_values('timestamp').reset_index(drop=True)
             
             for col in ['open', 'high', 'low', 'close', 'volume']:
