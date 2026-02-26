@@ -306,9 +306,25 @@ def render_backtest_tab():
         
         st.markdown("---")
         
-        st.subheader("風險管理 (ATR)")
-        atr_multiplier_sl = st.slider("ATR止損倍數", 0.5, 3.0, 1.5, 0.1, help="止損 = 當前ATR * 此倍數")
-        atr_multiplier_tp = st.slider("ATR止盈倍數", 1.0, 5.0, 3.0, 0.5, help="止盈 = 當前ATR * 此倍數")
+        st.subheader("風險管理")
+        
+        sltp_mode = st.radio(
+            "止損止盈模式",
+            ["固定百分比 (推薦)", "ATR倍數"],
+            index=0,
+            help="固定百分比通常有更好的風險報酬比"
+        )
+        
+        if sltp_mode == "固定百分比 (推薦)":
+            fixed_sl_pct = st.slider("固定止損 %", 0.3, 3.0, 0.5, 0.1) / 100
+            fixed_tp_pct = st.slider("固定止盈 %", 0.5, 5.0, 2.0, 0.1) / 100
+            atr_multiplier_sl = None
+            atr_multiplier_tp = None
+        else:
+            atr_multiplier_sl = st.slider("ATR止損倍數", 0.5, 3.0, 1.5, 0.1, help="止損 = 當前ATR * 此倍數")
+            atr_multiplier_tp = st.slider("ATR止盈倍數", 1.0, 5.0, 3.0, 0.5, help="止盈 = 當前ATR * 此倍數")
+            fixed_sl_pct = None
+            fixed_tp_pct = None
         
         st.markdown("---")
         
@@ -330,8 +346,11 @@ def render_backtest_tab():
                 'maker_fee': maker_fee,
                 'taker_fee': taker_fee,
                 'position_size_pct': position_size_pct,
+                'sltp_mode': sltp_mode,
                 'atr_multiplier_sl': atr_multiplier_sl,
-                'atr_multiplier_tp': atr_multiplier_tp
+                'atr_multiplier_tp': atr_multiplier_tp,
+                'fixed_sl_pct': fixed_sl_pct,
+                'fixed_tp_pct': fixed_tp_pct
             }
             st.session_state['backtest_started'] = True
     
@@ -382,24 +401,34 @@ def render_backtest_tab():
                     df = ml_predictor.predict(df)
                 
                 with st.spinner('計算風險參數...'):
-                    risk_manager = RiskManager({
-                        'initial_capital': params['capital'],
-                        'max_risk_per_trade': 0.02,
-                        'max_leverage': 10,
-                        'default_leverage': params['leverage'],
-                        'atr_multiplier_sl': params['atr_multiplier_sl'],
-                        'atr_multiplier_tp': params['atr_multiplier_tp']
-                    })
-                    
-                    for i in range(len(df)):
-                        if df.iloc[i]['signal_long'] == 1:
-                            sltp = risk_manager.calculate_stop_loss_take_profit(df.iloc[:i+1], 'LONG')
-                            df.loc[df.index[i], 'stop_loss'] = sltp['stop_loss']
-                            df.loc[df.index[i], 'take_profit'] = sltp['take_profit']
-                        elif df.iloc[i]['signal_short'] == 1:
-                            sltp = risk_manager.calculate_stop_loss_take_profit(df.iloc[:i+1], 'SHORT')
-                            df.loc[df.index[i], 'stop_loss'] = sltp['stop_loss']
-                            df.loc[df.index[i], 'take_profit'] = sltp['take_profit']
+                    if params['sltp_mode'] == "固定百分比 (推薦)":
+                        for i in range(len(df)):
+                            current_price = df.iloc[i]['close']
+                            if df.iloc[i]['signal_long'] == 1:
+                                df.loc[df.index[i], 'stop_loss'] = current_price * (1 - params['fixed_sl_pct'])
+                                df.loc[df.index[i], 'take_profit'] = current_price * (1 + params['fixed_tp_pct'])
+                            elif df.iloc[i]['signal_short'] == 1:
+                                df.loc[df.index[i], 'stop_loss'] = current_price * (1 + params['fixed_sl_pct'])
+                                df.loc[df.index[i], 'take_profit'] = current_price * (1 - params['fixed_tp_pct'])
+                    else:
+                        risk_manager = RiskManager({
+                            'initial_capital': params['capital'],
+                            'max_risk_per_trade': 0.02,
+                            'max_leverage': 10,
+                            'default_leverage': params['leverage'],
+                            'atr_multiplier_sl': params['atr_multiplier_sl'],
+                            'atr_multiplier_tp': params['atr_multiplier_tp']
+                        })
+                        
+                        for i in range(len(df)):
+                            if df.iloc[i]['signal_long'] == 1:
+                                sltp = risk_manager.calculate_stop_loss_take_profit(df.iloc[:i+1], 'LONG')
+                                df.loc[df.index[i], 'stop_loss'] = sltp['stop_loss']
+                                df.loc[df.index[i], 'take_profit'] = sltp['take_profit']
+                            elif df.iloc[i]['signal_short'] == 1:
+                                sltp = risk_manager.calculate_stop_loss_take_profit(df.iloc[:i+1], 'SHORT')
+                                df.loc[df.index[i], 'stop_loss'] = sltp['stop_loss']
+                                df.loc[df.index[i], 'take_profit'] = sltp['take_profit']
                 
                 with st.spinner('執行回測...'):
                     backtest_engine = BacktestEngine({
