@@ -51,31 +51,34 @@ def calculate_rsi_divergence(df: pd.DataFrame, period: int = 14) -> pd.DataFrame
     lookback = 20
     
     for i in range(lookback, len(df)):
-        window = df.iloc[i-lookback:i+1]
-        
-        # 找近期的高低點
-        recent_low_idx = window['low'].idxmin()
-        recent_high_idx = window['high'].idxmax()
-        
-        # Bullish Divergence
-        if i > recent_low_idx:
-            prev_low_window = df.iloc[max(0, recent_low_idx-lookback):recent_low_idx]
-            if len(prev_low_window) > 0:
-                prev_low_idx = prev_low_window['low'].idxmin()
-                
-                if (df.loc[i, 'low'] < df.loc[prev_low_idx, 'low'] and 
-                    df.loc[i, 'rsi'] > df.loc[prev_low_idx, 'rsi']):
-                    df.loc[i, 'rsi_bullish_div'] = 1
-        
-        # Bearish Divergence
-        if i > recent_high_idx:
-            prev_high_window = df.iloc[max(0, recent_high_idx-lookback):recent_high_idx]
-            if len(prev_high_window) > 0:
-                prev_high_idx = prev_high_window['high'].idxmax()
-                
-                if (df.loc[i, 'high'] > df.loc[prev_high_idx, 'high'] and 
-                    df.loc[i, 'rsi'] < df.loc[prev_high_idx, 'rsi']):
-                    df.loc[i, 'rsi_bearish_div'] = 1
+        try:
+            window = df.iloc[i-lookback:i+1]
+            
+            # 找近期的高低點
+            recent_low_idx = window['low'].idxmin()
+            recent_high_idx = window['high'].idxmax()
+            
+            # Bullish Divergence
+            if i > recent_low_idx:
+                prev_low_window = df.iloc[max(0, recent_low_idx-lookback):recent_low_idx]
+                if len(prev_low_window) > 0:
+                    prev_low_idx = prev_low_window['low'].idxmin()
+                    
+                    if (df.loc[df.index[i], 'low'] < df.loc[prev_low_idx, 'low'] and 
+                        df.loc[df.index[i], 'rsi'] > df.loc[prev_low_idx, 'rsi']):
+                        df.loc[df.index[i], 'rsi_bullish_div'] = 1
+            
+            # Bearish Divergence
+            if i > recent_high_idx:
+                prev_high_window = df.iloc[max(0, recent_high_idx-lookback):recent_high_idx]
+                if len(prev_high_window) > 0:
+                    prev_high_idx = prev_high_window['high'].idxmax()
+                    
+                    if (df.loc[df.index[i], 'high'] > df.loc[prev_high_idx, 'high'] and 
+                        df.loc[df.index[i], 'rsi'] < df.loc[prev_high_idx, 'rsi']):
+                        df.loc[df.index[i], 'rsi_bearish_div'] = 1
+        except:
+            continue
     
     return df
 
@@ -110,6 +113,9 @@ def calculate_bb_reversal(df: pd.DataFrame, period: int = 20, std: float = 2.0) 
     df['bb_mid'] = bb.bollinger_mavg()
     df['bb_low'] = bb.bollinger_lband()
     
+    # 布林帶寬度
+    df['bb_width'] = (df['bb_high'] - df['bb_low']) / df['bb_mid']
+    
     # 觸碰下軌反彈
     df['bb_bounce_up'] = ((df['low'] <= df['bb_low']) & 
                           (df['close'] > df['bb_low'])).astype(int)
@@ -133,15 +139,18 @@ def calculate_volume_divergence(df: pd.DataFrame) -> pd.DataFrame:
     df['volume_bearish_div'] = 0
     
     for i in range(20, len(df)):
-        # Bearish: 價格新高但量能減少
-        if (df['high'].iloc[i] > df['high'].iloc[i-10:i].max() and 
-            df['volume'].iloc[i] < df['volume'].iloc[i-10:i].mean()):
-            df.loc[df.index[i], 'volume_bearish_div'] = 1
-        
-        # Bullish: 價格新低但量能增加
-        if (df['low'].iloc[i] < df['low'].iloc[i-10:i].min() and 
-            df['volume'].iloc[i] > df['volume'].iloc[i-10:i].mean()):
-            df.loc[df.index[i], 'volume_bullish_div'] = 1
+        try:
+            # Bearish: 價格新高但量能減少
+            if (df['high'].iloc[i] > df['high'].iloc[i-10:i].max() and 
+                df['volume'].iloc[i] < df['volume'].iloc[i-10:i].mean()):
+                df.loc[df.index[i], 'volume_bearish_div'] = 1
+            
+            # Bullish: 價格新低但量能增加
+            if (df['low'].iloc[i] < df['low'].iloc[i-10:i].min() and 
+                df['volume'].iloc[i] > df['volume'].iloc[i-10:i].mean()):
+                df.loc[df.index[i], 'volume_bullish_div'] = 1
+        except:
+            continue
     
     return df
 
@@ -155,23 +164,26 @@ def calculate_support_resistance(df: pd.DataFrame, lookback: int = 50) -> pd.Dat
     df['near_resistance'] = 0
     
     for i in range(lookback, len(df)):
-        window = df.iloc[i-lookback:i]
-        
-        # 找支撐位 (近期低點)
-        support_levels = window.nsmallest(3, 'low')['low'].values
-        support = np.mean(support_levels)
-        
-        # 找阻力位 (近期高點)
-        resistance_levels = window.nlargest(3, 'high')['high'].values
-        resistance = np.mean(resistance_levels)
-        
-        current_price = df['close'].iloc[i]
-        
-        # 判斷是否接近支撐/阻力 (2% 範圍內)
-        if abs(current_price - support) / support < 0.02:
-            df.loc[df.index[i], 'near_support'] = 1
-        
-        if abs(current_price - resistance) / resistance < 0.02:
-            df.loc[df.index[i], 'near_resistance'] = 1
+        try:
+            window = df.iloc[i-lookback:i]
+            
+            # 找支撐位 (近期低點)
+            support_levels = window.nsmallest(3, 'low')['low'].values
+            support = np.mean(support_levels)
+            
+            # 找阻力位 (近期高點)
+            resistance_levels = window.nlargest(3, 'high')['high'].values
+            resistance = np.mean(resistance_levels)
+            
+            current_price = df['close'].iloc[i]
+            
+            # 判斷是否接近支撐/阻力 (2% 範圍內)
+            if abs(current_price - support) / support < 0.02:
+                df.loc[df.index[i], 'near_support'] = 1
+            
+            if abs(current_price - resistance) / resistance < 0.02:
+                df.loc[df.index[i], 'near_resistance'] = 1
+        except:
+            continue
     
     return df
