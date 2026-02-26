@@ -25,19 +25,15 @@ def render():
         **核心特點:**
         - 時間框架: 15分鐘
         - 交易頻率: 每日 40-50 筆
-        - TP/SL: 0.5% / 0.25% (2:1 RR)
+        - TP/SL: 0.5% / 0.3% (1.67:1 RR)
         - 平均持有: 3-5 根K線 (45-75分鐘)
         
-        **適用場景:**
-        - 高波動性市場
-        - 短線交易
-        - 快進快出
-        
-        **歷史績效:**
-        - 總報酬: **234.45%**
-        - 勝率: **57.2%**
-        - Sharpe: **5.38**
-        - 最大回撤: **-5.5%**
+        **優化方案:**
+        1. 動態 TP/SL - 根據波動性調整
+        2. 信號質量分級 - 高信心加大倉位
+        3. 移動止損 - 保護盈利
+        4. 時段過濾 - 只在高品質時段交易
+        5. 嚴格篩選 - 過濾低質量信號
         """)
     
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
@@ -84,152 +80,253 @@ def render_backtest_config_tab():
     
     st.success(f"找到模型: Long={len(long_models)}, Short={len(short_models)}")
     
-    col1, col2 = st.columns([1, 1])
+    # ============ 基礎配置 ============
+    st.markdown("### 基礎配置")
+    
+    col1, col2, col3 = st.columns(3)
     
     with col1:
-        st.markdown("#### 數據配置")
-        
-        # 回測天數
         backtest_days = st.number_input(
             "回測天數",
             min_value=30,
             max_value=365,
             value=90,
-            step=10,
-            help="使用最近 N 天的數據進行回測"
+            step=10
         )
         
-        # 訓練/測試分割
-        train_ratio = st.slider(
-            "訓練集比例",
-            min_value=0.5,
-            max_value=0.95,
-            value=0.9,
-            step=0.05,
-            help="數據前 X% 用於訓練,剩餘用於回測"
-        )
-        
-        # 幣種
         symbol = st.selectbox(
             "交易對",
             options=['BTCUSDT', 'ETHUSDT', 'BNBUSDT'],
             index=0
         )
+    
+    with col2:
+        train_ratio = st.slider(
+            "訓練集比例",
+            min_value=0.5,
+            max_value=0.95,
+            value=0.9,
+            step=0.05
+        )
         
-        # 時間框架
         timeframe = st.selectbox(
             "時間框架",
             options=['15m', '5m', '30m', '1h'],
-            index=0,
-            help="K線時間間隔"
+            index=0
         )
     
-    with col2:
-        st.markdown("#### 交易配置")
-        
-        # 起始資金
+    with col3:
         initial_capital = st.number_input(
             "起始資金 (USD)",
-            min_value=1000,
-            max_value=1000000,
-            value=10000,
-            step=1000
+            min_value=1.0,
+            max_value=1000000.0,
+            value=10000.0,
+            step=100.0
         )
         
-        # 槓桿
         leverage = st.slider(
             "槓桿倍數",
             min_value=1,
             max_value=20,
             value=10,
-            step=1,
-            help="槓桿越高風險越大"
-        )
-        
-        # 最大倉位
-        position_size = st.slider(
-            "最大倉位 (%)",
-            min_value=1.0,
-            max_value=10.0,
-            value=2.0,
-            step=0.5,
-            help="單筆交易使用資金的百分比"
-        ) / 100
-        
-        # 閾值
-        threshold = st.slider(
-            "信號閾值",
-            min_value=0.5,
-            max_value=0.9,
-            value=0.6,
-            step=0.05,
-            help="模型預測機率需超過此值才開倉"
+            step=1
         )
     
     st.divider()
     
-    col1, col2 = st.columns(2)
+    # ============ 交易參數 ============
+    st.markdown("### 交易參數")
+    
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.markdown("#### 止盈止損")
-        
-        # TP
+        position_size = st.slider(
+            "基礎倉位 (%)",
+            min_value=0.5,
+            max_value=10.0,
+            value=2.0,
+            step=0.5
+        ) / 100
+    
+    with col2:
+        threshold = st.slider(
+            "信號閾值",
+            min_value=0.5,
+            max_value=0.9,
+            value=0.55,
+            step=0.05,
+            help="降低可增加交易數"
+        )
+    
+    with col3:
         tp_pct = st.slider(
             "止盈 TP (%)",
             min_value=0.1,
             max_value=2.0,
-            value=0.5,
-            step=0.1,
-            help="價格達到此百分比時止盈"
+            value=0.6,
+            step=0.1
         )
-        
-        # SL
+    
+    with col4:
         sl_pct = st.slider(
             "止損 SL (%)",
             min_value=0.1,
             max_value=1.0,
-            value=0.25,
-            step=0.05,
-            help="價格反向達到此百分比時止損"
+            value=0.3,
+            step=0.05
         )
-        
-        # 計算 RR
-        rr_ratio = tp_pct / sl_pct
+    
+    rr_ratio = tp_pct / sl_pct
+    col1, col2 = st.columns([1, 3])
+    with col1:
         st.metric("風險報酬比 (RR)", f"{rr_ratio:.2f}:1")
-        
+    with col2:
         if rr_ratio < 1.5:
             st.warning("建議 RR 比至少 1.5:1")
         elif rr_ratio >= 2:
             st.success("優秀的 RR 比!")
     
-    with col2:
-        st.markdown("#### 方向選擇")
-        
+    col1, col2 = st.columns(2)
+    with col1:
         long_enabled = st.checkbox("啟用 Long", value=True)
+    with col2:
         short_enabled = st.checkbox("啟用 Short", value=True)
-        
-        if not long_enabled and not short_enabled:
-            st.error("至少需要啟用一個方向")
-        
-        st.markdown("#### 進階設置")
-        
-        max_holding_bars = st.number_input(
-            "最大持有K線數",
-            min_value=1,
-            max_value=100,
-            value=20,
-            help="超過此K線數強制平倉"
-        )
-        
-        trailing_stop = st.checkbox(
-            "啟用移動止損",
-            value=False,
-            help="動態調整止損位置 (實驗性功能)"
-        )
     
     st.divider()
     
-    # 執行按鈕
+    # ============ 優化方案 ============
+    st.markdown("### 優化方案")
+    st.caption("勾選以下方案來提升績效")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("#### 方案1: 動態 TP/SL")
+        enable_dynamic_tpsl = st.checkbox(
+            "啟用動態 TP/SL",
+            value=False,
+            help="根據市場波動性自動調整止盈止損"
+        )
+        
+        if enable_dynamic_tpsl:
+            with st.expander("調整參數"):
+                st.caption("低波動")
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    low_vol_tp = st.number_input("TP%", 0.1, 1.0, 0.3, 0.1, key="low_tp")
+                with col_b:
+                    low_vol_sl = st.number_input("SL%", 0.1, 0.5, 0.2, 0.05, key="low_sl")
+                
+                st.caption("中波動")
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    mid_vol_tp = st.number_input("TP%", 0.1, 1.0, 0.5, 0.1, key="mid_tp")
+                with col_b:
+                    mid_vol_sl = st.number_input("SL%", 0.1, 0.5, 0.25, 0.05, key="mid_sl")
+                
+                st.caption("高波動")
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    high_vol_tp = st.number_input("TP%", 0.1, 2.0, 0.8, 0.1, key="high_tp")
+                with col_b:
+                    high_vol_sl = st.number_input("SL%", 0.1, 1.0, 0.35, 0.05, key="high_sl")
+        else:
+            low_vol_tp, low_vol_sl = 0.003, 0.002
+            mid_vol_tp, mid_vol_sl = 0.005, 0.0025
+            high_vol_tp, high_vol_sl = 0.008, 0.0035
+        
+        st.markdown("#### 方案2: 信號質量分級")
+        enable_quality_sizing = st.checkbox(
+            "啟用質量分級倉位",
+            value=False,
+            help="高信心信號使用更大倉位"
+        )
+        
+        if enable_quality_sizing:
+            with st.expander("調整參數"):
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    high_conf_threshold = st.slider("高信心閾值", 0.7, 0.9, 0.75, 0.05)
+                    mid_conf_threshold = st.slider("中信心閾值", 0.6, 0.8, 0.65, 0.05)
+                with col_b:
+                    high_conf_size = st.slider("高信心倉位%", 2.0, 5.0, 3.0, 0.5) / 100
+                    mid_conf_size = st.slider("中信心倉位%", 1.0, 3.0, 2.0, 0.5) / 100
+                    low_conf_size = st.slider("低信心倉位%", 0.5, 2.0, 1.0, 0.5) / 100
+        else:
+            high_conf_threshold, mid_conf_threshold = 0.75, 0.65
+            high_conf_size, mid_conf_size, low_conf_size = 0.03, 0.02, 0.01
+        
+        st.markdown("#### 方案3: 移動止損")
+        enable_trailing_stop = st.checkbox(
+            "啟用移動止損",
+            value=False,
+            help="達到一定盈利後跟隨價格移動止損"
+        )
+        
+        if enable_trailing_stop:
+            with st.expander("調整參數"):
+                trailing_activation = st.slider(
+                    "啟動比例 (TP的X%)",
+                    0.3, 0.8, 0.5, 0.1,
+                    help="獲利達 TP*50% 時啟動"
+                )
+                trailing_distance = st.slider(
+                    "跟隨距離 (%)",
+                    0.1, 0.5, 0.15, 0.05,
+                    help="回撤 0.15% 就出場"
+                ) / 100
+        else:
+            trailing_activation = 0.5
+            trailing_distance = 0.0015
+    
+    with col2:
+        st.markdown("#### 方案4: 時段過濾")
+        enable_time_filter = st.checkbox(
+            "啟用時段過濾",
+            value=False,
+            help="只在高流動性時段交易"
+        )
+        
+        if enable_time_filter:
+            st.info("""
+            過濾條件:
+            - 過濾週末
+            - 過濾午休 (12-14點)
+            - 只在亞/歐/美開盤時段
+            """)
+        
+        st.markdown("#### 方案5: 嚴格篩選")
+        enable_strict_filter = st.checkbox(
+            "啟用嚴格篩選",
+            value=False,
+            help="過濾低質量信號"
+        )
+        
+        if enable_strict_filter:
+            with st.expander("調整參數"):
+                min_volume_ratio = st.slider(
+                    "最小量能比例",
+                    0.5, 1.5, 0.8, 0.1,
+                    help="量能低於平均 80% 不交易"
+                )
+                max_return_threshold = st.slider(
+                    "最大波動 (%)",
+                    1.0, 5.0, 2.0, 0.5,
+                    help="單根K線波動太大不交易"
+                ) / 100
+                high_volatility_threshold = st.slider(
+                    "高波動時閾值",
+                    0.6, 0.8, 0.65, 0.05,
+                    help="波動擴大時需要更高機率"
+                )
+        else:
+            min_volume_ratio = 0.8
+            max_return_threshold = 0.02
+            high_volatility_threshold = 0.65
+    
+    st.divider()
+    
+    # ============ 執行按鈕 ============
     col1, col2, col3 = st.columns([2, 1, 1])
     
     with col1:
@@ -251,28 +348,22 @@ def render_backtest_config_tab():
             use_container_width=True
         )
     
-    # 保存配置
+    # 保存/載入配置
     if save_config:
         config = {
-            'backtest_days': backtest_days,
-            'train_ratio': train_ratio,
-            'symbol': symbol,
-            'timeframe': timeframe,
-            'initial_capital': initial_capital,
-            'leverage': leverage,
-            'position_size': position_size,
-            'threshold': threshold,
-            'tp_pct': tp_pct,
-            'sl_pct': sl_pct,
-            'long_enabled': long_enabled,
-            'short_enabled': short_enabled,
-            'max_holding_bars': max_holding_bars,
-            'trailing_stop': trailing_stop
+            'backtest_days': backtest_days, 'symbol': symbol, 'timeframe': timeframe,
+            'train_ratio': train_ratio, 'initial_capital': initial_capital, 'leverage': leverage,
+            'position_size': position_size, 'threshold': threshold, 'tp_pct': tp_pct, 'sl_pct': sl_pct,
+            'long_enabled': long_enabled, 'short_enabled': short_enabled,
+            'enable_dynamic_tpsl': enable_dynamic_tpsl,
+            'enable_quality_sizing': enable_quality_sizing,
+            'enable_trailing_stop': enable_trailing_stop,
+            'enable_time_filter': enable_time_filter,
+            'enable_strict_filter': enable_strict_filter
         }
         
         config_dir = Path('backtest_results/v10_configs')
         config_dir.mkdir(parents=True, exist_ok=True)
-        
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         config_path = config_dir / f'config_{timestamp}.json'
         
@@ -281,37 +372,33 @@ def render_backtest_config_tab():
         
         st.success(f"配置已保存: {config_path.name}")
     
-    # 載入配置
     if load_config:
         config_dir = Path('backtest_results/v10_configs')
         if config_dir.exists():
             configs = sorted(config_dir.glob('config_*.json'))
             if configs:
                 with open(configs[-1], 'r', encoding='utf-8') as f:
-                    loaded_config = json.load(f)
-                st.success(f"已載入配置: {configs[-1].name}")
-                st.json(loaded_config)
+                    loaded = json.load(f)
+                st.success(f"已載入: {configs[-1].name}")
+                st.json(loaded)
             else:
-                st.warning("未找到已保存的配置")
-        else:
-            st.warning("配置目錄不存在")
+                st.warning("無已保存配置")
     
-    # 執行回測
+    # ============ 執行回測 ============
     if run_button:
         if not long_enabled and not short_enabled:
-            st.error("請至少啟用一個交易方向")
+            st.error("請至少啟用一個方向")
             return
         
         with st.spinner("正在執行回測..."):
             try:
-                # 載入數據
                 from utils.hf_data_loader import load_klines
+                from backtest_v10_scalping_advanced import AdvancedScalpingBacktester
                 
                 end_date = datetime.now()
                 start_date = end_date - timedelta(days=backtest_days)
                 
-                st.info(f"載入 {symbol} {timeframe} 數據: {start_date.date()} 至 {end_date.date()}")
-                
+                st.info(f"載入 {symbol} {timeframe} 數據...")
                 df = load_klines(
                     symbol=symbol,
                     timeframe=timeframe,
@@ -325,18 +412,12 @@ def render_backtest_config_tab():
                 
                 st.success(f"成功載入 {len(df)} 根K線")
                 
-                # 計算起始索引
                 oos_start = int(len(df) * train_ratio)
-                
-                st.info(f"訓練集: {oos_start} 根K線, 測試集: {len(df) - oos_start} 根K線")
-                
-                # 執行回測
-                from backtest_v10_scalping import ScalpingBacktester
                 
                 long_path = str(long_models[-1])
                 short_path = str(short_models[-1])
                 
-                backtester = ScalpingBacktester(
+                backtester = AdvancedScalpingBacktester(
                     long_model_path=long_path,
                     short_model_path=short_path,
                     initial_capital=initial_capital,
@@ -344,7 +425,33 @@ def render_backtest_config_tab():
                     leverage=leverage,
                     threshold=threshold,
                     tp_pct=tp_pct / 100,
-                    sl_pct=sl_pct / 100
+                    sl_pct=sl_pct / 100,
+                    # 優化方案
+                    enable_dynamic_tpsl=enable_dynamic_tpsl,
+                    enable_quality_sizing=enable_quality_sizing,
+                    enable_trailing_stop=enable_trailing_stop,
+                    enable_time_filter=enable_time_filter,
+                    enable_strict_filter=enable_strict_filter,
+                    # 動態 TP/SL
+                    low_vol_tp=low_vol_tp / 100,
+                    low_vol_sl=low_vol_sl / 100,
+                    mid_vol_tp=mid_vol_tp / 100,
+                    mid_vol_sl=mid_vol_sl / 100,
+                    high_vol_tp=high_vol_tp / 100,
+                    high_vol_sl=high_vol_sl / 100,
+                    # 質量分級
+                    high_conf_threshold=high_conf_threshold,
+                    mid_conf_threshold=mid_conf_threshold,
+                    high_conf_size=high_conf_size,
+                    mid_conf_size=mid_conf_size,
+                    low_conf_size=low_conf_size,
+                    # 移動止損
+                    trailing_activation=trailing_activation,
+                    trailing_distance=trailing_distance,
+                    # 嚴格篩選
+                    min_volume_ratio=min_volume_ratio,
+                    max_return_threshold=max_return_threshold,
+                    high_volatility_threshold=high_volatility_threshold
                 )
                 
                 report = backtester.run_backtest(
@@ -355,7 +462,7 @@ def render_backtest_config_tab():
                 )
                 
                 if not report:
-                    st.error("回測執行失敗")
+                    st.error("回測失敗或無交易")
                     return
                 
                 # 保存結果
@@ -367,7 +474,6 @@ def render_backtest_config_tab():
                 equity_df = report['equity']
                 summary = report['summary']
                 
-                # 保存 CSV
                 trades_df.to_csv(output_dir / f'trades_{timestamp}.csv', index=False, encoding='utf-8-sig')
                 equity_df.to_csv(output_dir / f'equity_curve_{timestamp}.csv', index=False, encoding='utf-8-sig')
                 
@@ -375,7 +481,7 @@ def render_backtest_config_tab():
                 report_json = {
                     'timestamp': timestamp,
                     'config': {
-                        'strategy': 'v10_scalping',
+                        'strategy': 'v10_scalping_advanced',
                         'symbol': symbol,
                         'timeframe': timeframe,
                         'backtest_days': backtest_days,
@@ -384,7 +490,14 @@ def render_backtest_config_tab():
                         'sl_pct': sl_pct,
                         'leverage': leverage,
                         'position_size': position_size * 100,
-                        'initial_capital': initial_capital
+                        'initial_capital': initial_capital,
+                        'optimizations': {
+                            'dynamic_tpsl': enable_dynamic_tpsl,
+                            'quality_sizing': enable_quality_sizing,
+                            'trailing_stop': enable_trailing_stop,
+                            'time_filter': enable_time_filter,
+                            'strict_filter': enable_strict_filter
+                        }
                     },
                     'summary': {
                         'total_trades': int(summary['total_trades']),
@@ -405,11 +518,10 @@ def render_backtest_config_tab():
                 st.success("回測完成!")
                 st.balloons()
                 
-                # 顯示結果摘要
+                # 結果摘要
                 st.markdown("### 回測結果")
                 
                 col1, col2, col3, col4 = st.columns(4)
-                
                 with col1:
                     st.metric("總交易數", summary['total_trades'])
                 with col2:
@@ -420,7 +532,6 @@ def render_backtest_config_tab():
                     st.metric("Sharpe", f"{summary['sharpe_ratio']:.2f}")
                 
                 col1, col2, col3, col4 = st.columns(4)
-                
                 with col1:
                     st.metric("盈虧比", f"{summary['profit_factor']:.2f}")
                 with col2:
@@ -429,6 +540,17 @@ def render_backtest_config_tab():
                     st.metric("平均獲利", f"${summary['avg_win']:.2f}")
                 with col4:
                     st.metric("平均虧損", f"${summary['avg_loss']:.2f}")
+                
+                # 優化效果
+                if any([enable_dynamic_tpsl, enable_quality_sizing, enable_trailing_stop, enable_time_filter, enable_strict_filter]):
+                    st.markdown("### 啟用的優化方案")
+                    enabled = []
+                    if enable_dynamic_tpsl: enabled.append("動態 TP/SL")
+                    if enable_quality_sizing: enabled.append("質量分級倉位")
+                    if enable_trailing_stop: enabled.append("移動止損")
+                    if enable_time_filter: enabled.append("時段過濾")
+                    if enable_strict_filter: enabled.append("嚴格篩選")
+                    st.info(f"已啟用: {', '.join(enabled)}")
                 
                 st.info("切換到其他分頁查看詳細結果")
                 
@@ -938,5 +1060,6 @@ def render_generate_tab():
     
     - `generate_v10_report.py` - 報告生成程式
     - `backtest_v10_scalping.py` - v10 回測引擎
+    - `backtest_v10_scalping_advanced.py` - v10 進階回測引擎 (含優化方案)
     - `train_v10_high_frequency.py` - v10 模型訓練
     """)
