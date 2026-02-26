@@ -40,11 +40,25 @@ def train_v11_model(
     if not feature_cols:
         raise ValueError("未找到特徵欄位")
     
+    print(f"\n使用 {len(feature_cols)} 個特徵")
+    
     # 移除 NaN
     df_clean = df[feature_cols + ['label']].dropna()
     
+    print(f"清理後數據: {len(df_clean)} 根K線")
+    
     X = df_clean[feature_cols]
     y = df_clean['label']
+    
+    # 檢查標籤分佈
+    long_count = (y == 1).sum()
+    short_count = (y == -1).sum()
+    neutral_count = (y == 0).sum()
+    
+    print(f"\n標籤分佈:")
+    print(f"- Long: {long_count} ({long_count/len(y)*100:.2f}%)")
+    print(f"- Short: {short_count} ({short_count/len(y)*100:.2f}%)")
+    print(f"- Neutral: {neutral_count} ({neutral_count/len(y)*100:.2f}%)")
     
     # 切分訓練/測試集
     split_idx = int(len(df_clean) * train_split)
@@ -58,31 +72,46 @@ def train_v11_model(
         y_train_long = (y_train == 1).astype(int)
         y_test_long = (y_test == 1).astype(int)
         
-        model_long, metrics_long = train_single_model(
-            X_train, y_train_long,
-            X_test, y_test_long,
-            model_type, use_class_weights
-        )
+        # 檢查訓練集是否有足夠的正樣本
+        train_pos = y_train_long.sum()
+        train_neg = (y_train_long == 0).sum()
         
-        # 保存模型
-        model_path = Path('models_output') / f'v11_long_{symbol}_{timeframe}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pkl'
-        with open(model_path, 'wb') as f:
-            pickle.dump({
-                'model': model_long,
-                'feature_cols': feature_cols,
-                'symbol': symbol,
-                'timeframe': timeframe,
-                'version': 'v11'
-            }, f)
+        print(f"訓練集: Positive={train_pos}, Negative={train_neg}")
         
-        results['long'] = {
-            'model': model_long,
-            'model_path': str(model_path),
-            'metrics': metrics_long
-        }
-        
-        print(f"[Long] AUC-ROC: {metrics_long['auc_roc']:.3f}")
-        print(f"[Long] 標籤率: {metrics_long['label_rate']*100:.2f}%")
+        if train_pos < 10:
+            print(f"⚠️ 警告: Long 正樣本太少 ({train_pos}),跳過訓練")
+            print("建議: 降低 ZigZag 門檻或增加訓練天數")
+        elif train_pos < 2 or train_neg < 2:
+            print("❌ 錯誤: 訓練集標籤不足,無法訓練")
+        else:
+            try:
+                model_long, metrics_long = train_single_model(
+                    X_train, y_train_long,
+                    X_test, y_test_long,
+                    model_type, use_class_weights
+                )
+                
+                # 保存模型
+                model_path = Path('models_output') / f'v11_long_{symbol}_{timeframe}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pkl'
+                with open(model_path, 'wb') as f:
+                    pickle.dump({
+                        'model': model_long,
+                        'feature_cols': feature_cols,
+                        'symbol': symbol,
+                        'timeframe': timeframe,
+                        'version': 'v11'
+                    }, f)
+                
+                results['long'] = {
+                    'model': model_long,
+                    'model_path': str(model_path),
+                    'metrics': metrics_long
+                }
+                
+                print(f"✅ [Long] AUC-ROC: {metrics_long['auc_roc']:.3f}")
+                print(f"✅ [Long] 標籤率: {metrics_long['label_rate']*100:.2f}%")
+            except Exception as e:
+                print(f"❌ [Long] 訓練失敗: {str(e)}")
     
     # 訓練 Short 模型
     if train_short:
@@ -91,34 +120,52 @@ def train_v11_model(
         y_train_short = (y_train == -1).astype(int)
         y_test_short = (y_test == -1).astype(int)
         
-        model_short, metrics_short = train_single_model(
-            X_train, y_train_short,
-            X_test, y_test_short,
-            model_type, use_class_weights
-        )
+        # 檢查訓練集是否有足夠的正樣本
+        train_pos = y_train_short.sum()
+        train_neg = (y_train_short == 0).sum()
         
-        # 保存模型
-        model_path = Path('models_output') / f'v11_short_{symbol}_{timeframe}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pkl'
-        with open(model_path, 'wb') as f:
-            pickle.dump({
-                'model': model_short,
-                'feature_cols': feature_cols,
-                'symbol': symbol,
-                'timeframe': timeframe,
-                'version': 'v11'
-            }, f)
+        print(f"訓練集: Positive={train_pos}, Negative={train_neg}")
         
-        results['short'] = {
-            'model': model_short,
-            'model_path': str(model_path),
-            'metrics': metrics_short
-        }
-        
-        print(f"[Short] AUC-ROC: {metrics_short['auc_roc']:.3f}")
-        print(f"[Short] 標籤率: {metrics_short['label_rate']*100:.2f}%")
+        if train_pos < 10:
+            print(f"⚠️ 警告: Short 正樣本太少 ({train_pos}),跳過訓練")
+            print("建議: 降低 ZigZag 門檻或增加訓練天數")
+        elif train_pos < 2 or train_neg < 2:
+            print("❌ 錯誤: 訓練集標籤不足,無法訓練")
+        else:
+            try:
+                model_short, metrics_short = train_single_model(
+                    X_train, y_train_short,
+                    X_test, y_test_short,
+                    model_type, use_class_weights
+                )
+                
+                # 保存模型
+                model_path = Path('models_output') / f'v11_short_{symbol}_{timeframe}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pkl'
+                with open(model_path, 'wb') as f:
+                    pickle.dump({
+                        'model': model_short,
+                        'feature_cols': feature_cols,
+                        'symbol': symbol,
+                        'timeframe': timeframe,
+                        'version': 'v11'
+                    }, f)
+                
+                results['short'] = {
+                    'model': model_short,
+                    'model_path': str(model_path),
+                    'metrics': metrics_short
+                }
+                
+                print(f"✅ [Short] AUC-ROC: {metrics_short['auc_roc']:.3f}")
+                print(f"✅ [Short] 標籤率: {metrics_short['label_rate']*100:.2f}%")
+            except Exception as e:
+                print(f"❌ [Short] 訓練失敗: {str(e)}")
     
     # 保存報告
-    save_training_report(results, symbol, timeframe)
+    if results:
+        save_training_report(results, symbol, timeframe)
+    else:
+        print("\n⚠️ 沒有成功訓練任何模型")
     
     return results
 
@@ -127,6 +174,11 @@ def train_single_model(X_train, y_train, X_test, y_test, model_type, use_class_w
     """
     訓練單個模型
     """
+    
+    # 再次檢查標籤
+    unique_labels = np.unique(y_train)
+    if len(unique_labels) < 2:
+        raise ValueError(f"訓練集只有一個類別: {unique_labels}")
     
     if model_type == 'CatBoost':
         from catboost import CatBoostClassifier
@@ -193,7 +245,8 @@ def train_single_model(X_train, y_train, X_test, y_test, model_type, use_class_w
         'auc_pr': average_precision_score(y_test, y_pred_proba),
         'f1': f1_score(y_test, y_pred),
         'label_rate': y_train.mean(),
-        'n_samples': len(y_train)
+        'n_samples': len(y_train),
+        'n_positive': y_train.sum()
     }
     
     return model, metrics
