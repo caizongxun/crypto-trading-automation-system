@@ -13,7 +13,6 @@ from datetime import datetime
 import numpy as np
 import importlib.util
 
-# 設置路徑
 project_root = Path(__file__).parent.parent.parent
 v1_root = project_root / 'reversal_strategy_v1'
 v2_root = project_root / 'high_frequency_strategy_v2'
@@ -286,45 +285,29 @@ def train_v2_model_in_gui(params):
 
 def render_v2_backtest():
     st.header("📈 V2 回測分析")
-    
-    # 模型選擇
     models_dir = project_root / 'models'
     v2_models = []
     if models_dir.exists():
         v2_models = [d.name for d in models_dir.iterdir() if d.is_dir() and '_v2_' in d.name]
-    
     if not v2_models:
         st.warning("⚠️ 沒有V2模型，請先訓練模型")
         return
-    
     col1, col2 = st.columns([1, 2])
     with col1:
         st.subheader("回測參數")
         selected_model = st.selectbox("選擇模型", v2_models, key="v2_backtest_model")
-        
         st.markdown("##### 資金設定")
         initial_capital = st.number_input("初始資金 (USDT)", 1000, 100000, 10000, 1000)
-        
         st.markdown("##### 交易設定")
         commission = st.slider("手續費 %", 0.01, 0.5, 0.1, 0.01) / 100
         slippage = st.slider("滑點 %", 0.01, 0.2, 0.05, 0.01) / 100
-        
         st.markdown("##### 止盈止損")
         take_profit = st.slider("止盈 %", 0.5, 5.0, 1.5, 0.1) / 100
         stop_loss = st.slider("止損 %", 0.3, 3.0, 0.8, 0.1) / 100
-        
         st.markdown("---")
         if st.button("開始V2回測", type="primary", use_container_width=True):
-            st.session_state['v2_backtest_params'] = {
-                'model_name': selected_model,
-                'initial_capital': initial_capital,
-                'commission': commission,
-                'slippage': slippage,
-                'take_profit': take_profit,
-                'stop_loss': stop_loss
-            }
+            st.session_state['v2_backtest_params'] = {'model_name': selected_model, 'initial_capital': initial_capital, 'commission': commission, 'slippage': slippage, 'take_profit': take_profit, 'stop_loss': stop_loss}
             st.session_state['v2_backtest_started'] = True
-    
     with col2:
         st.subheader("回測結果")
         if st.session_state.get('v2_backtest_started', False):
@@ -338,22 +321,91 @@ def run_v2_backtest_in_gui(params):
         model_dir = project_root / 'models' / params['model_name']
         with open(model_dir / 'model_config.json', 'r') as f:
             model_config = json.load(f)
-        
         symbol = model_config['symbol']
         timeframe = model_config['timeframe']
+        sequence_length = model_config.get('sequence_length', 100)
         
         v2_backtest_path = v2_root / 'backtest' / 'engine.py'
+        v2_ensemble_path = v2_root / 'core' / 'ensemble_predictor.py'
+        v2_feature_path = v2_root / 'core' / 'feature_engineer.py'
+        v2_loader_path = v2_root / 'data' / 'hf_loader.py'
+        
         v2_backtest_module = load_v2_module(v2_backtest_path, 'v2_backtest_engine')
+        v2_ensemble_module = load_v2_module(v2_ensemble_path, 'v2_ensemble_predictor')
+        v2_feature_module = load_v2_module(v2_feature_path, 'v2_feature_engineer')
+        v2_loader_module = load_v2_module(v2_loader_path, 'v2_hf_loader')
+        
         V2BacktestEngine = v2_backtest_module.BacktestEngine
+        EnsemblePredictor = v2_ensemble_module.EnsemblePredictor
+        V2FeatureEngineer = v2_feature_module.FeatureEngineer
+        V2HFDataLoader = v2_loader_module.HFDataLoader
         
-        with st.spinner('步驟 1/4: 加載模型...'):
-            st.info(f"模型: {symbol} {timeframe}")
-            st.success("✓ 模型加載完成")
+        with st.spinner('步驟 1/5: 加載模型...'):
+            predictor = EnsemblePredictor({})
+            predictor.load(model_dir)
+            st.success(f"✓ 模型: {symbol} {timeframe}")
         
-        with st.spinner('步驟 2/4: 加載數據...'):
-            st.info("功能開發中 - 將快速完成")
+        with st.spinner('步驟 2/5: 加載數據...'):
+            loader = V2HFDataLoader()
+            df = loader.load_klines(symbol, timeframe)
+            st.success(f"✓ 數據: {len(df)} 筆")
         
-        st.success("✅ V2回測功能正在開發中，敬請期待！")
+        with st.spinner('步驟 3/5: 特徵工程...'):
+            feature_config = {'sequence_length': sequence_length, 'use_orderbook_features': False, 'use_microstructure': True, 'use_momentum': True, 'lookback_periods': [5, 10, 20, 50]}
+            feature_engineer = V2FeatureEngineer(feature_config)
+            df = feature_engineer.create_features(df)
+            exclude_cols = ['timestamp']
+            feature_cols = [col for col in df.columns if col not in exclude_cols and df[col].dtype in [np.float64, np.float32, np.int64, np.int32]]
+            for col in feature_cols:
+                df[col] = df[col].replace([np.inf, -np.inf], np.nan)
+            df = df.dropna(subset=feature_cols)
+            st.success(f"✓ 特徵: {len(feature_cols)}")
+        
+        with st.spinner('步驟 4/5: 生成預測...'):
+            X = df[feature_cols].values
+            X_seq = None
+            if model_config.get('use_transformer', False):
+                X_seq = feature_engineer.prepare_sequences(df, feature_cols)
+                X = X[sequence_length:]
+            predictions, confidences = predictor.predict(X, X_seq)
+            st.success(f"✓ 預測: {len(predictions)} 筆")
+        
+        with st.spinner('步驟 5/5: 執行回測...'):
+            backtest_config = {'initial_capital': params['initial_capital'], 'commission': params['commission'], 'slippage': params['slippage'], 'take_profit': params['take_profit'], 'stop_loss': params['stop_loss']}
+            engine = V2BacktestEngine(backtest_config)
+            df_backtest = df.iloc[sequence_length:].reset_index(drop=True) if model_config.get('use_transformer', False) else df
+            results = engine.run(df_backtest, predictions, confidences)
+            st.success("✓ 回測完成")
+        
+        metrics = results['metrics']
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("總交易", metrics['total_trades'])
+            st.metric("勝率", f"{metrics['win_rate']:.1%}")
+        with col2:
+            st.metric("總報酬", f"{metrics['total_return']:.1%}")
+            st.metric("盈虧因子", f"{metrics['profit_factor']:.2f}")
+        with col3:
+            st.metric("Sharpe比率", f"{metrics['sharpe_ratio']:.2f}")
+            st.metric("最大回撤", f"{metrics['max_drawdown']:.1%}")
+        with col4:
+            st.metric("平均盈利", f"{metrics['avg_win']:.2f}")
+            st.metric("平均虧損", f"{metrics['avg_loss']:.2f}")
+        
+        st.markdown("---")
+        st.subheader("權益曲線")
+        equity_df = pd.DataFrame(results['equity_curve'])
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=equity_df['timestamp'], y=equity_df['equity'], mode='lines', name='權益', line=dict(color='blue', width=2)))
+        fig.update_layout(height=400, xaxis_title='時間', yaxis_title='權益 (USDT)', hovermode='x unified')
+        st.plotly_chart(fig, use_container_width=True)
+        
+        if len(results['trades']) > 0:
+            st.markdown("---")
+            st.subheader("交易明細")
+            trades_df = pd.DataFrame(results['trades'])
+            trades_df['pnl_pct'] = trades_df['pnl_pct'] * 100
+            st.dataframe(trades_df.head(50), use_container_width=True)
         
     except Exception as e:
         st.error(f"❌ 失敗: {str(e)}")
