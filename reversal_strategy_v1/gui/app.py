@@ -80,7 +80,7 @@ def main():
             st.success("[最新策略]\n目標: 30天50%報酬\n特色: 多時間框架融合\n市場狀態自適應\n動態倉位管理")
             col1, col2 = st.columns(2)
             with col1:
-                st.metric("月交易目標", "100-150筆")
+                st.metric("月交易目標", "150筆")
             with col2:
                 st.metric("月報酬目標", "50%")
         
@@ -104,7 +104,7 @@ def show_strategy_comparison():
             '項目': ['模型架構', '時序學習', '集成學習', '信號過濾', '風險管理', '市場自適應', '月交易量', '月報酬目標', '訓練時間', '狀態'],
             'V1 反轉策略': ['XGBoost', 'X', 'X', '單層', '固定', 'X', '50-80筆', '30-50%', '5-10分鐘', '可用'],
             'V2 高頻策略': ['LightGBM/Transformer', 'O (可選)', 'O (加權集成)', '三層過濾', '動態調整', 'O', '140-150筆', '50%+', '5-15分鐘', '[無效] 盈虧因子0.90'],
-            'V3 自適應策略': ['LightGBM (優化)', 'X', 'X', '五層過濾', 'ATR動態', 'O (趨勢識別)', '100-150筆', '50%', '5-10分鐘', '[推薦]']
+            'V3 自適應策略': ['LightGBM (優化)', 'X', 'X', '五層過濾', 'ATR動態', 'O (趨勢識別)', '150筆', '50%', '5-10分鐘', '[推薦]']
         })
         st.table(comparison_df)
         if st.button("關閉對比", use_container_width=True):
@@ -137,13 +137,13 @@ def render_v3_training():
         st.markdown("---")
         st.markdown("**標籤生成參數**")
         forward_window = st.slider("前瞻窗口", 5, 15, 8)
-        atr_profit_mult = st.slider("ATR盈利倍數", 1.0, 3.0, 1.5, 0.1)
-        atr_loss_mult = st.slider("ATR虧損倍數", 0.5, 1.5, 0.8, 0.1)
+        atr_profit_mult = st.slider("ATR盈利倍數", 1.0, 3.0, 1.2, 0.1)
+        atr_loss_mult = st.slider("ATR虧損倍數", 0.5, 1.5, 1.0, 0.1)
         
         st.markdown("---")
         st.markdown("**質量過濾**")
-        min_volume_ratio = st.slider("最小成交量比", 1.0, 2.0, 1.2, 0.1)
-        min_trend_strength = st.slider("最小趨勢強度", 0.3, 0.8, 0.5, 0.05)
+        min_volume_ratio = st.slider("最小成交量比", 0.8, 2.0, 1.0, 0.1)
+        min_trend_strength = st.slider("最小趨勢強度", 0.1, 0.8, 0.3, 0.05)
         
         st.markdown("---")
         if st.button("開始V3訓練", type="primary", use_container_width=True):
@@ -226,6 +226,11 @@ def train_v3_model_in_gui(params):
             neutral_count = (df['label'] == 0).sum()
             
             st.info(f"[標籤分布] 做多={long_count} ({long_count/len(df)*100:.1f}%) | 做空={short_count} ({short_count/len(df)*100:.1f}%) | 中立={neutral_count} ({neutral_count/len(df)*100:.1f}%)")
+            
+            # 警告: 類別不平衡
+            if neutral_count / len(df) > 0.95:
+                st.warning("[警告] 中立標籤>95%,可能導致模型偏差")
+            
             st.success(f"[OK] 有效標籤: {long_count + short_count}")
         
         # 步驟 4: 準備數據
@@ -283,6 +288,11 @@ def train_v3_model_in_gui(params):
             st.metric("Recall", f"{results['val_recall']:.3f}")
         
         st.info(f"[信心度] 做多平均: {results['avg_conf_long']:.1%} | 做空平均: {results['avg_conf_short']:.1%}")
+        
+        # 檢查模型狀態
+        if results['val_accuracy'] > 0.95 and results['val_precision'] < 0.5:
+            st.error("[警告] 模型可能過擬合或類別不平衡嚴重")
+            st.warning("建議: 1) 降低ATR盈利倍數 2) 放寬質量過濾 3) 增加有效標籤")
         
         # 特徵重要性
         importance_df = predictor.get_feature_importance(feature_cols, top_k=15)
@@ -372,7 +382,7 @@ def render_v3_backtest():
         slippage = st.slider("滑點 %", 0.01, 0.2, 0.05, 0.01) / 100
         
         st.markdown("**信號過濾**")
-        min_confidence = st.slider("最小信心度", 0.3, 0.9, 0.6, 0.05)
+        min_confidence = st.slider("最小信心度", 0.3, 0.9, 0.45, 0.05)
         
         st.markdown("**ATR止盈止損**")
         atr_tp_strong = st.slider("強趨勢止盈倍數", 1.5, 4.0, 2.5, 0.1)
@@ -412,50 +422,67 @@ def run_v3_backtest_in_gui(params):
         # 加載V3模組
         v3_predictor_path = v3_root / 'core' / 'predictor.py'
         v3_feature_eng_path = v3_root / 'core' / 'feature_engineer.py'
+        v3_label_gen_path = v3_root / 'core' / 'label_generator.py'  # 加載標籤生成器
         v3_signal_filter_path = v3_root / 'core' / 'signal_filter.py'
         v3_backtest_path = v3_root / 'backtest' / 'engine.py'
         v3_loader_path = v3_root / 'data' / 'hf_loader.py'
         
         v3_predictor = load_module(v3_predictor_path, 'v3_predictor')
         v3_feature_eng = load_module(v3_feature_eng_path, 'v3_feature_engineer')
+        v3_label_gen = load_module(v3_label_gen_path, 'v3_label_generator')
         v3_signal_filter = load_module(v3_signal_filter_path, 'v3_signal_filter')
         v3_backtest = load_module(v3_backtest_path, 'v3_backtest')
         v3_loader = load_module(v3_loader_path, 'v3_loader')
         
         V3Predictor = v3_predictor.Predictor
         V3FeatureEngineer = v3_feature_eng.FeatureEngineer
+        V3LabelGenerator = v3_label_gen.LabelGenerator
         V3SignalFilter = v3_signal_filter.SignalFilter
         V3BacktestEngine = v3_backtest.BacktestEngine
         V3HFDataLoader = v3_loader.HFDataLoader
         
         # 步驟 1: 加載模型
-        with st.spinner('步驟 1/5: 加載模型...'):
+        with st.spinner('步驟 1/6: 加載模型...'):
             predictor = V3Predictor({})
             predictor.load(model_dir)
             st.success(f"[OK] 模型: {symbol} {timeframe}")
         
         # 步驟 2: 加載數據
-        with st.spinner('步驟 2/5: 加載數據...'):
+        with st.spinner('步驟 2/6: 加載數據...'):
             loader = V3HFDataLoader()
             df = loader.load_klines(symbol, timeframe)
             st.success(f"[OK] 數據: {len(df)} 筆")
         
         # 步驟 3: 特徵工程
-        with st.spinner('步驟 3/5: 特徵工程...'):
+        with st.spinner('步驟 3/6: 特徵工程...'):
             feature_engineer = V3FeatureEngineer({})
             df = feature_engineer.create_features(df)
             st.success(f"[OK] 特徵完成")
         
+        # 步驟 3.5: 生成輔助特徵 (trend_strength)
+        with st.spinner('步驟 3.5/6: 生成輔助特徵...'):
+            label_config = model_config.get('label_config', {})
+            label_generator = V3LabelGenerator(label_config)
+            df = label_generator._calculate_helper_features(df)
+            st.success(f"[OK] 輔助特徵完成")
+        
         # 步驟 4: 生成預測
-        with st.spinner('步驟 4/5: 生成預測...'):
+        with st.spinner('步驟 4/6: 生成預測...'):
+            # 確保所有特徵存在
+            missing_features = [f for f in feature_names if f not in df.columns]
+            if missing_features:
+                st.warning(f"[警告] 缺少特徵: {missing_features[:5]}... 共{len(missing_features)}個")
+                # 只使用存在的特徵
+                feature_names = [f for f in feature_names if f in df.columns]
+            
             X = df[feature_names].values
             predictions, confidences = predictor.predict(X)
             
             # 信號過濾
             filter_config = {
                 'min_confidence': params['min_confidence'],
-                'min_volume_ratio': 1.3,
-                'min_trend_strength': 0.5,
+                'min_volume_ratio': 1.1,
+                'min_trend_strength': 0.3,
                 'max_atr_ratio': 0.05
             }
             signal_filter = V3SignalFilter(filter_config)
@@ -464,7 +491,7 @@ def run_v3_backtest_in_gui(params):
             st.success(f"[OK] 預測完成")
         
         # 步驟 5: 執行回測
-        with st.spinner('步驟 5/5: 執行回測...'):
+        with st.spinner('步驟 5/6: 執行回測...'):
             backtest_config = {
                 'initial_capital': params['initial_capital'],
                 'commission': params['commission'],
