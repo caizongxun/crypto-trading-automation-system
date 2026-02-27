@@ -368,6 +368,11 @@ def run_v2_backtest_in_gui(params):
                 X_seq = feature_engineer.prepare_sequences(df, feature_cols)
                 X = X[sequence_length:]
             predictions, confidences = predictor.predict(X, X_seq)
+            
+            long_count = (predictions == 1).sum()
+            short_count = (predictions == -1).sum()
+            neutral_count = (predictions == 0).sum()
+            st.info(f"信號統計: 做多={long_count} ({long_count/len(predictions)*100:.1f}%) | 做空={short_count} ({short_count/len(predictions)*100:.1f}%) | 中立={neutral_count} ({neutral_count/len(predictions)*100:.1f}%)")
             st.success(f"✓ 預測: {len(predictions)} 筆")
         
         with st.spinner('步驟 5/5: 執行回測...'):
@@ -378,6 +383,13 @@ def run_v2_backtest_in_gui(params):
             st.success("✓ 回測完成")
         
         metrics = results['metrics']
+        
+        if 'error' in metrics:
+            st.error(f"⚠️ {metrics['error']}")
+            st.warning("模型不產生交易信號，請檢查:")
+            st.info("1. 模型訓練是否完成\n2. 模型配置是否正確\n3. 回測參數設定")
+            return
+        
         col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.metric("總交易", metrics['total_trades'])
