@@ -13,20 +13,23 @@ from datetime import datetime
 import numpy as np
 import importlib.util
 
-project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root))
+# 設置路徑
+project_root = Path(__file__).parent.parent.parent  # crypto-trading-automation-system
+v1_root = project_root / 'reversal_strategy_v1'
+v2_root = project_root / 'high_frequency_strategy_v2'
 
-# 添加V2路徑
-v2_root = project_root.parent / 'high_frequency_strategy_v2'
+# 添加到sys.path
+sys.path.insert(0, str(project_root))
+sys.path.insert(0, str(v1_root))
 sys.path.insert(0, str(v2_root))
 
 # V1引用
-from core.signal_detector import SignalDetector
-from core.feature_engineer import FeatureEngineer
-from core.ml_predictor import MLPredictor
-from core.risk_manager import RiskManager
-from backtest.engine import BacktestEngine
-from data.hf_loader import HFDataLoader
+from reversal_strategy_v1.core.signal_detector import SignalDetector
+from reversal_strategy_v1.core.feature_engineer import FeatureEngineer
+from reversal_strategy_v1.core.ml_predictor import MLPredictor
+from reversal_strategy_v1.core.risk_manager import RiskManager
+from reversal_strategy_v1.backtest.engine import BacktestEngine
+from reversal_strategy_v1.data.hf_loader import HFDataLoader
 
 st.set_page_config(
     page_title="加密貨幣交易系統",
@@ -170,7 +173,7 @@ def train_v1_model_in_gui(params):
         with st.spinner('步驟 5/5: 保存模型...'):
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             model_name = f"{params['symbol']}_{params['timeframe']}_v1_{timestamp}"
-            model_dir = Path('models') / model_name
+            model_dir = project_root / 'models' / model_name
             ml_predictor.save(model_dir)
             with open(model_dir / 'model_config.json', 'w') as f:
                 json.dump({'symbol': params['symbol'], 'timeframe': params['timeframe'], 'training_date': timestamp, 'model_version': 'v1', 'data_samples': len(df), 'config': config}, f, indent=2)
@@ -277,7 +280,7 @@ def train_v2_model_in_gui(params):
         with st.spinner('步驟 6/6: 保存模型...'):
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             model_name = f"{params['symbol']}_{params['timeframe']}_v2_{timestamp}"
-            model_dir = Path('models') / model_name
+            model_dir = project_root / 'models' / model_name
             predictor.save(model_dir)
             with open(model_dir / 'model_config.json', 'w') as f:
                 json.dump({'symbol': params['symbol'], 'timeframe': params['timeframe'], 'model_version': 'v2', 'training_date': timestamp, 'data_samples': len(df), 'train_samples': len(X_train), 'val_samples': len(X_val), 'feature_count': len(feature_cols), 'sequence_length': params['sequence_length']}, f, indent=2)
@@ -311,7 +314,7 @@ def create_v2_labels(df, forward_window=8, profit_threshold=0.004, stop_loss=0.0
 def render_v2_status():
     st.header("⚙️ V2 狀態")
     col1, col2, col3 = st.columns(3)
-    models_dir = Path('models')
+    models_dir = project_root / 'models'
     v1_count = v2_count = 0
     if models_dir.exists():
         for d in models_dir.iterdir():
