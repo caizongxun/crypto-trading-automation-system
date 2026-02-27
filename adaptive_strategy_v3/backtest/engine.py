@@ -1,6 +1,12 @@
 """
 V3 Backtest Engine - ATR Dynamic Risk Management
 ATR動態風險管理回測引擎
+
+修正:
+1. 添加槓桿支持
+2. 最大倉位限制
+3. 正確處理過濾後的信號
+4. 改進交易邏輯
 """
 import pandas as pd
 import numpy as np
@@ -17,6 +23,8 @@ class BacktestEngine:
     3. 時間止損
     4. 分批平倉
     5. 趨勢強度自適應
+    6. 槓桿支持
+    7. 最大倉位限制
     """
     
     def __init__(self, config: Dict):
@@ -26,6 +34,10 @@ class BacktestEngine:
         self.initial_capital = config.get('initial_capital', 10000)
         self.commission = config.get('commission', 0.001)  # 0.1%
         self.slippage = config.get('slippage', 0.0005)    # 0.05%
+        
+        # 槓桿和倉位
+        self.leverage = config.get('leverage', 1)  # 槓桿倍數
+        self.max_position_pct = config.get('max_position_pct', 0.1)  # 最大倉位10%
         
         # ATR動態參數
         self.atr_tp_strong = config.get('atr_tp_strong', 2.5)  # 強趨勢止盈
@@ -60,12 +72,18 @@ class BacktestEngine:
         
         Args:
             df: K線數據 (必須包含: close, high, low, atr_14, trend_strength)
-            predictions: 預測信號 (-1, 0, 1)
+            predictions: 預測信號 (-1, 0, 1) - 已經過濾
             confidences: 預測信心度 (0-1)
         
         Returns:
             回測結果
         """
+        print(f"\n[回測引擎] 開始回測")
+        print(f"數據筆數: {len(df)}")
+        print(f"信號筆數: {(predictions != 0).sum()}")
+        print(f"槓桿: {self.leverage}x")
+        print(f"最大倉位: {self.max_position_pct*100:.0f}%")
+        
         self.trades = []
         self.equity_curve = []
         self.current_position = None
@@ -87,7 +105,7 @@ class BacktestEngine:
             current_low = df.iloc[i]['low']
             atr = df.iloc[i]['atr_14']
             
-            # 跨行處理現有倉位
+            # 處理現有倉位
             if self.current_position is not None:
                 pos = self.current_position
                 
@@ -146,21 +164,28 @@ class BacktestEngine:
                     position_size = 0
                     partial_closed = False
             
-            # 開仓信號
+            # 開倉信號 - 關鍵修正: 只在有信號且無持倉時才開倉
             if self.current_position is None and i < len(predictions):
                 signal = predictions[i]
                 
                 if signal != 0:  # 有交易信號
-                    # 計算倉位大小 (固定資金10%)
-                    position_value = capital * 0.1
+                    # 計算倉位大小 (使用槓桿)
+                    position_value = capital * self.max_position_pct * self.leverage
                     position_size = position_value / current_price
+                    
+                    # 實際佔用保證金
+                    margin_required = position_value / self.leverage
+                    
+                    # 檢查資金是否足夠
+                    if margin_required > capital * 0.9:  # 保留10%緩衝
+                        continue  # 跳過此信號
                     
                     # 計算止盈止損
                     tp, sl = self._calculate_tp_sl(df, i, signal, current_price, atr)
                     
-                    # 開仓
-                    entry_cost = position_value * (1 + self.commission + self.slippage)
-                    capital -= entry_cost
+                    # 開倉 (扣除保證金和手續費)
+                    entry_cost = position_value * (self.commission + self.slippage)
+                    capital -= (margin_required + entry_cost)
                     
                     self.current_position = {
                         'side': 'long' if signal == 1 else 'short',
@@ -170,6 +195,7 @@ class BacktestEngine:
                         'take_profit': tp,
                         'stop_loss': sl,
                         'original_size': position_size,
+                        'margin': margin_required,
                         'atr': atr,
                         'trailing_active': False
                     }
@@ -183,7 +209,7 @@ class BacktestEngine:
                     position_size,
                     self.current_position['side']
                 )
-                equity += unrealized_pnl
+                equity += unrealized_pnl + self.current_position['margin']
             
             self.equity_curve.append({
                 'timestamp': df.iloc[i]['timestamp'] if 'timestamp' in df.columns else i,
@@ -192,6 +218,8 @@ class BacktestEngine:
         
         # 計算績效指標
         metrics = self._calculate_metrics()
+        
+        print(f"\n[回測完成] 總交易: {len(self.trades)} 筆")
         
         return {
             'trades': self.trades,
@@ -292,7 +320,7 @@ class BacktestEngine:
     def _calculate_pnl(self, entry_price: float, exit_price: float, 
                       size: float, side: str) -> float:
         """
-        計算盈虧
+        計算盈虧 (考慮槓桿)
         """
         if side == 'long':
             gross_pnl = (exit_price - entry_price) * size
@@ -335,7 +363,7 @@ class BacktestEngine:
         
         # Sharpe比率
         equity_returns = equity_df['equity'].pct_change().dropna()
-        sharpe_ratio = equity_returns.mean() / equity_returns.std() * np.sqrt(252) if len(equity_returns) > 0 else 0
+        sharpe_ratio = equity_returns.mean() / equity_returns.std() * np.sqrt(252) if len(equity_returns) > 0 and equity_returns.std() > 0 else 0
         
         # 最大回撤
         equity_series = equity_df['equity']
