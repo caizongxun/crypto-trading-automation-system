@@ -47,28 +47,12 @@ def main():
     
     with st.sidebar:
         st.header("策略選擇")
-        
-        strategy_version = st.radio(
-            "選擇策略版本",
-            [
-                "V1 - 訂單流反轉策略",
-                "V2 - 高頻Transformer策略"
-            ],
-            index=0,
-            help="V1適合中頻交易(50-80筆/月)，V2適合高頻交易(140-150筆/月)"
-        )
-        
+        strategy_version = st.radio("選擇策略版本", ["V1 - 訂單流反轉策略", "V2 - 高頻Transformer策略"], index=0, help="V1適合中頻交易(50-80筆/月)，V2適合高頻交易(140-150筆/月)")
         st.markdown("---")
-        
         if "V1" in strategy_version:
             st.subheader("🔵 V1 特點")
             st.caption("訂單流不平衡 + XGBoost")
-            st.info(
-                "訂單流不平衡檢測\n"
-                "流動性掃蕩識別\n"
-                "市場微觀結構分析\n"
-                "XGBoost機器學習"
-            )
+            st.info("訂單流不平衡檢測\n流動性掃蕩識別\n市場微觀結構分析\nXGBoost機器學習")
             col1, col2 = st.columns(2)
             with col1:
                 st.metric("月交易目標", "50-80筆")
@@ -77,20 +61,13 @@ def main():
         else:
             st.subheader("⚡ V2 特點")
             st.caption("Transformer + 集成學習")
-            st.info(
-                "Transformer時序學習\n"
-                "多時間框架特徵\n"
-                "三層信號過濾\n"
-                "市場狀態自適應"
-            )
+            st.info("Transformer時序學習\n多時間框架特徵\n三層信號過濾\n市場狀態自適應")
             col1, col2 = st.columns(2)
             with col1:
                 st.metric("月交易目標", "140-150筆")
             with col2:
                 st.metric("月報酬目標", "50%+")
-        
         st.markdown("---")
-        
         if st.button("📊 查看V1 vs V2對比", use_container_width=True):
             st.session_state['show_comparison'] = True
     
@@ -103,7 +80,6 @@ def main():
         render_v2_interface()
 
 def show_strategy_comparison():
-    """V1 vs V2 對比"""
     with st.expander("🏆 V1 vs V2 策略對比", expanded=True):
         comparison_df = pd.DataFrame({
             '項目': ['模型架構', '時序學習', '集成學習', '信號過濾', '風險管理', '市場自適應', '月交易量', '月報酬目標', '訓練時間', 'GPU需求'],
@@ -111,7 +87,6 @@ def show_strategy_comparison():
             'V2 高頻策略': ['Transformer + LightGBM', '✓ (100根K線)', '✓ (加權集成)', '三層過濾', '動態調整', '✓', '140-150筆', '50%+', '10-20分鐘', '建議使用']
         })
         st.table(comparison_df)
-        
         if st.button("關閉對比", use_container_width=True):
             st.session_state['show_comparison'] = False
             st.rerun()
@@ -121,22 +96,22 @@ def render_v1_interface():
     with tab1:
         render_v1_training()
     with tab2:
-        render_v1_backtest()
+        st.info("請先完成V1訓練")
     with tab3:
-        render_paper_trading_tab()
+        st.info("功能開發中")
     with tab4:
-        render_live_trading_tab()
+        st.warning("需先驗證")
     with tab5:
-        render_v1_analytics()
+        st.info("請先回測")
 
 def render_v2_interface():
     tab1, tab2, tab3, tab4 = st.tabs(["🧠 V2模型訓練", "📈 V2回測分析", "🎮 V2模擬交易", "⚙️ 系統狀態"])
     with tab1:
         render_v2_training()
     with tab2:
-        render_v2_backtest()
+        st.info("V2回測開發中")
     with tab3:
-        render_v2_paper_trading()
+        st.info("開發中")
     with tab4:
         render_v2_status()
 
@@ -148,16 +123,13 @@ def render_v1_training():
         symbol = st.selectbox("交易對", ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "AVAXUSDT"], key="v1_train_symbol")
         timeframe = st.selectbox("時間框架", ["15m", "1h", "4h"], index=0, key="v1_train_timeframe")
         st.markdown("---")
-        st.subheader("信號檢測")
         lookback = st.slider("回溯週期", 10, 50, 20)
         imbalance_threshold = st.slider("OFI閾值", 0.5, 0.8, 0.6, 0.05)
         st.markdown("---")
-        st.subheader("標籤生成")
         forward_window = st.slider("前瞻窗口", 8, 20, 12)
         profit_threshold = st.slider("盈利目標 %", 0.5, 3.0, 1.0, 0.1) / 100
         stop_loss = st.slider("止損 %", 0.3, 2.0, 0.5, 0.1) / 100
         st.markdown("---")
-        st.subheader("機器學習模型")
         n_estimators = st.slider("樹數量", 100, 500, 200, 50)
         max_depth = st.slider("最大深度", 3, 10, 5)
         test_size = st.slider("驗證集比例", 0.1, 0.3, 0.2, 0.05)
@@ -172,7 +144,7 @@ def render_v1_training():
             train_v1_model_in_gui(st.session_state['v1_training_params'])
             st.session_state['v1_training_started'] = False
         else:
-            st.info("### V1訓練流程\n\n1. **加載數據**: HuggingFace K線\n2. **信號檢測**: OFI + 流動性\n3. **特徵工程**: 50+指標\n4. **標籤生成**: 前瞻盈虧\n5. **模型訓練**: XGBoost\n6. **模型驗證**: 三集切分\n\n**預計時間**: 5-10分鐘")
+            st.info("### V1訓練流程\n\n1. 加載HuggingFace K線\n2. OFI + 流動性信號\n3. 50+指標特徵\n4. 前瞻盈虧標籤\n5. XGBoost訓練\n6. 三集驗證\n\n**預計**: 5-10分鐘")
 
 def train_v1_model_in_gui(params):
     try:
@@ -218,7 +190,6 @@ def render_v2_training():
         symbol = st.selectbox("交易對", ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT"], key="v2_train_symbol")
         timeframe = st.selectbox("時間框架", ["15m", "1h"], index=0, key="v2_train_timeframe")
         st.markdown("---")
-        st.subheader("模型配置")
         sequence_length = st.slider("序列長度", 50, 200, 100, 10, help="Transformer輸入K線數")
         use_transformer = st.checkbox("Transformer模型", value=True)
         use_lgb = st.checkbox("LightGBM模型", value=True)
@@ -234,7 +205,7 @@ def render_v2_training():
             train_v2_model_in_gui(st.session_state['v2_training_params'])
             st.session_state['v2_training_started'] = False
         else:
-            st.info("### V2 Transformer訓練\n\n1. **加載數據**: HuggingFace K線\n2. **特徵提取**: 50+指標 + 微觀結構\n3. **序列準備**: 100根K線序列\n4. **模型訓練**: Transformer + LightGBM\n5. **集成學習**: 加權平均\n\n**預計時間**: 10-20分鐘")
+            st.info("### V2 Transformer訓練\n\n1. 加載HuggingFace K線\n2. 50+指標 + 微觀結構\n3. 100根K線序列\n4. Transformer + LightGBM\n5. 加權集成\n\n**預計**: 10-20分鐘")
 
 def train_v2_model_in_gui(params):
     try:
@@ -271,7 +242,6 @@ def train_v2_model_in_gui(params):
             exclude_cols = ['timestamp', 'label']
             feature_cols = [col for col in df.columns if col not in exclude_cols and df[col].dtype in [np.float64, np.float32, np.int64, np.int32]]
             
-            # 移除NaN和Inf
             for col in feature_cols:
                 df[col] = df[col].replace([np.inf, -np.inf], np.nan)
             df = df.dropna(subset=feature_cols + ['label'])
@@ -280,7 +250,6 @@ def train_v2_model_in_gui(params):
             train_size = int(len(df) * 0.7)
             val_size = int(len(df) * 0.15)
             
-            # 確保有足夠數據
             if train_size < seq_len + 100:
                 st.error(f"數據不足! 需要至少 {seq_len + 100} 筆,當前僅 {train_size} 筆")
                 return
@@ -288,11 +257,9 @@ def train_v2_model_in_gui(params):
             df_train = df.iloc[:train_size].reset_index(drop=True)
             df_val = df.iloc[train_size:train_size+val_size].reset_index(drop=True)
             
-            # 準備序列數據
-X_train_seq = feature_engineer.prepare_sequences(df_train, feature_cols)
+            X_train_seq = feature_engineer.prepare_sequences(df_train, feature_cols)
             X_val_seq = feature_engineer.prepare_sequences(df_val, feature_cols)
             
-            # 準備非序列數據 (必須與序列長度匹配)
             X_train = df_train[feature_cols].values[seq_len:]
             y_train = df_train['label'].values[seq_len:]
             X_val = df_val[feature_cols].values[seq_len:]
@@ -340,30 +307,6 @@ def create_v2_labels(df, forward_window=8, profit_threshold=0.004, stop_loss=0.0
         if short_profit >= profit_threshold and short_loss < stop_loss:
             df.loc[df.index[i], 'label'] = -1
     return df
-
-def render_v1_backtest():
-    st.header("📈 V1 回測")
-    st.info("請先完成V1訓練")
-
-def render_v2_backtest():
-    st.header("📈 V2 回測")
-    st.info("V2回測開發中")
-
-def render_paper_trading_tab():
-    st.header("🎮 模擬交易")
-    st.info("功能開發中")
-
-def render_live_trading_tab():
-    st.header("💰 實盤交易")
-    st.warning("需先驗證")
-
-def render_v2_paper_trading():
-    st.header("🎮 V2 模擬")
-    st.info("開發中")
-
-def render_v1_analytics():
-    st.header("📊 V1 分析")
-    st.info("請先回測")
 
 def render_v2_status():
     st.header("⚙️ V2 狀態")
