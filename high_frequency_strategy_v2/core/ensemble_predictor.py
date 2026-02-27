@@ -29,6 +29,9 @@ class EnsemblePredictor:
         
         self.transformer_model = None
         self.lgb_model = None
+        
+        # 診斷模式
+        self.debug_mode = False
     
     def _load_transformer_module(self):
         """動態加載Transformer模組"""
@@ -82,7 +85,7 @@ class EnsemblePredictor:
             )
             
             results['lgb_trained'] = True
-            print("✓ LightGBM訓練完成")
+            print("[OK] LightGBM訓練完成")
         
         # 訓練Transformer (如果提供了序列數據)
         if self.use_transformer and X_train_seq is not None:
@@ -109,9 +112,9 @@ class EnsemblePredictor:
                 
                 results['transformer_trained'] = True
                 results['transformer_history'] = history
-                print("✓ Transformer訓練完成")
+                print("[OK] Transformer訓練完成")
             except Exception as e:
-                print(f"⚠️ Transformer訓練失敗: {str(e)}")
+                print(f"[警告] Transformer訓練失敗: {str(e)}")
                 print("繼續使用僅LightGBM模式")
                 results['transformer_trained'] = False
         
@@ -126,41 +129,74 @@ class EnsemblePredictor:
             confidences: 信心度 (0-1)
         """
         predictions = []
-        confidences = []
+        all_probs = []  # 保存原始機率
         
         # LightGBM預測
         if self.lgb_model is not None:
-            lgb_probs = self.lgb_model.predict(X)  # shape: (n_samples, 3)
+            lgb_probs = self.lgb_model.predict(X)  # shape: (n_samples, 3) 類別機率
+            
+            if self.debug_mode:
+                print(f"[DEBUG] LGB probs shape: {lgb_probs.shape}")
+                print(f"[DEBUG] LGB probs sample: {lgb_probs[:5]}")
+                print(f"[DEBUG] LGB probs min/max: {lgb_probs.min():.4f}/{lgb_probs.max():.4f}")
+            
             # 類別 0,1,2 對應 -1,0,1
-            lgb_pred = np.argmax(lgb_probs, axis=1) - 1  # 轉換回 -1,0,1
-            lgb_conf = np.max(lgb_probs, axis=1)
+            lgb_pred_class = np.argmax(lgb_probs, axis=1) - 1  # 轉換回 -1,0,1
+            lgb_conf = np.max(lgb_probs, axis=1)  # 每個樣本的最高類別機率
+            
+            if self.debug_mode:
+                print(f"[DEBUG] LGB pred before filter: {lgb_pred_class[:20]}")
+                print(f"[DEBUG] LGB conf: min={lgb_conf.min():.4f}, max={lgb_conf.max():.4f}, mean={lgb_conf.mean():.4f}")
+                print(f"[DEBUG] Confidence threshold: {self.confidence_threshold}")
+                print(f"[DEBUG] Samples above threshold: {(lgb_conf >= self.confidence_threshold).sum()} / {len(lgb_conf)}")
             
             # 信心度過濾: 只有高信心度才交易
-            lgb_pred = np.where(lgb_conf >= self.confidence_threshold, lgb_pred, 0)
+            lgb_pred_filtered = np.where(lgb_conf >= self.confidence_threshold, lgb_pred_class, 0)
             
-            predictions.append(lgb_pred * self.weights['lgb'])
-            confidences.append(lgb_conf * self.weights['lgb'])
+            if self.debug_mode:
+                print(f"[DEBUG] LGB pred after filter: {lgb_pred_filtered[:20]}")
+                print(f"[DEBUG] Long signals: {(lgb_pred_filtered == 1).sum()}")
+                print(f"[DEBUG] Short signals: {(lgb_pred_filtered == -1).sum()}")
+                print(f"[DEBUG] Neutral signals: {(lgb_pred_filtered == 0).sum()}")
+            
+            predictions.append(lgb_pred_filtered)
+            all_probs.append(lgb_conf)
         
         # Transformer預測
         if self.transformer_model is not None and X_seq is not None:
             trans_pred, trans_probs = self.transformer_model.predict(X_seq)
             trans_conf = np.max(trans_probs, axis=1)
-            predictions.append(trans_pred * self.weights['transformer'])
-            confidences.append(trans_conf * self.weights['transformer'])
+            predictions.append(trans_pred)
+            all_probs.append(trans_conf)
         
         # 集成結果
-        if self.ensemble_method == 'weighted_avg':
-            final_pred = np.round(np.sum(predictions, axis=0)).astype(int)
-            final_conf = np.sum(confidences, axis=0) / len(confidences)
+        if len(predictions) == 1:
+            # 單一模型
+            final_pred = predictions[0]
+            final_conf = all_probs[0]
+        elif self.ensemble_method == 'weighted_avg':
+            # 加權平均 (但不影響信心度)
+            weighted_preds = []
+            for i, pred in enumerate(predictions):
+                model_name = 'lgb' if i == 0 else 'transformer'
+                weight = self.weights.get(model_name, 0.5)
+                weighted_preds.append(pred * weight)
+            final_pred = np.round(np.sum(weighted_preds, axis=0)).astype(int)
+            # 信心度取平均，不加權
+            final_conf = np.mean(all_probs, axis=0)
         elif self.ensemble_method == 'voting':
             final_pred = np.round(np.median(predictions, axis=0)).astype(int)
-            final_conf = np.mean(confidences, axis=0)
+            final_conf = np.mean(all_probs, axis=0)
         else:
             final_pred = predictions[0]
-            final_conf = confidences[0]
+            final_conf = all_probs[0]
         
         # 確保輸出範圍在 -1, 0, 1
         final_pred = np.clip(final_pred, -1, 1)
+        
+        if self.debug_mode:
+            print(f"[DEBUG] Final pred: {final_pred[:20]}")
+            print(f"[DEBUG] Final conf: min={final_conf.min():.4f}, max={final_conf.max():.4f}, mean={final_conf.mean():.4f}")
         
         return final_pred, final_conf
     
@@ -191,4 +227,4 @@ class EnsemblePredictor:
                 self.transformer_model = TransformerTrainer(checkpoint['config'])
                 self.transformer_model.load(path)
             except Exception as e:
-                print(f"⚠️ Transformer模型加載失敗: {str(e)}")
+                print(f"[警告] Transformer模型加載失敗: {str(e)}")
