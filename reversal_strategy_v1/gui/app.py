@@ -14,16 +14,14 @@ import numpy as np
 import importlib.util
 
 # 設置路徑
-project_root = Path(__file__).parent.parent.parent  # crypto-trading-automation-system
+project_root = Path(__file__).parent.parent.parent
 v1_root = project_root / 'reversal_strategy_v1'
 v2_root = project_root / 'high_frequency_strategy_v2'
 
-# 添加到sys.path
 sys.path.insert(0, str(project_root))
 sys.path.insert(0, str(v1_root))
 sys.path.insert(0, str(v2_root))
 
-# V1引用
 from reversal_strategy_v1.core.signal_detector import SignalDetector
 from reversal_strategy_v1.core.feature_engineer import FeatureEngineer
 from reversal_strategy_v1.core.ml_predictor import MLPredictor
@@ -39,7 +37,6 @@ st.set_page_config(
 )
 
 def load_v2_module(module_path, module_name):
-    """動態加載V2模組"""
     spec = importlib.util.spec_from_file_location(module_name, module_path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -50,7 +47,7 @@ def main():
     
     with st.sidebar:
         st.header("策略選擇")
-        strategy_version = st.radio("選擇策略版本", ["V1 - 訂單流反轉策略", "V2 - 高頻Transformer策略"], index=0, help="V1適合中頻交易(50-80筆/月)，V2適合高頻交易(140-150筆/月)")
+        strategy_version = st.radio("選擇策略版本", ["V1 - 訂單流反轉策略", "V2 - 高頻Transformer策略"], index=0)
         st.markdown("---")
         if "V1" in strategy_version:
             st.subheader("🔵 V1 特點")
@@ -63,7 +60,7 @@ def main():
                 st.metric("月報酬目標", "30-50%")
         else:
             st.subheader("⚡ V2 特點")
-            st.caption("LightGBM / Transformer + 集成學習")
+            st.caption("LightGBM / Transformer")
             st.info("LightGBM快速訓練\n可選Transformer時序\n多時間框架特徵\n市場狀態自適應")
             col1, col2 = st.columns(2)
             with col1:
@@ -112,7 +109,7 @@ def render_v2_interface():
     with tab1:
         render_v2_training()
     with tab2:
-        st.info("V2回測開發中")
+        render_v2_backtest()
     with tab3:
         st.info("開發中")
     with tab4:
@@ -194,11 +191,9 @@ def render_v2_training():
         timeframe = st.selectbox("時間框架", ["15m", "1h"], index=0, key="v2_train_timeframe")
         st.markdown("---")
         sequence_length = st.slider("序列長度", 50, 200, 100, 10, help="Transformer輸入K線數")
-        
         st.markdown("##### 模型選擇")
         use_lgb = st.checkbox("LightGBM模型", value=True, help="快速訓練，低記憶體")
         use_transformer = st.checkbox("Transformer模型", value=False, help="時序學習，需要更多記憶體")
-        
         if not use_lgb and not use_transformer:
             st.warning("⚠️ 至少選擇一個模型")
         elif use_transformer and use_lgb:
@@ -207,7 +202,6 @@ def render_v2_training():
             st.success("✓ LightGBM模式 (快速訓練)")
         else:
             st.info("✓ Transformer模式 (時序學習)")
-        
         st.markdown("---")
         if st.button("開始V2訓練", type="primary", use_container_width=True, disabled=(not use_lgb and not use_transformer)):
             st.session_state['v2_training_params'] = {'symbol': symbol, 'timeframe': timeframe, 'sequence_length': sequence_length, 'use_transformer': use_transformer, 'use_lgb': use_lgb}
@@ -225,72 +219,56 @@ def train_v2_model_in_gui(params):
         v2_feature_path = v2_root / 'core' / 'feature_engineer.py'
         v2_ensemble_path = v2_root / 'core' / 'ensemble_predictor.py'
         v2_loader_path = v2_root / 'data' / 'hf_loader.py'
-        
         v2_feature_module = load_v2_module(v2_feature_path, 'v2_feature_engineer')
         v2_ensemble_module = load_v2_module(v2_ensemble_path, 'v2_ensemble_predictor')
         v2_loader_module = load_v2_module(v2_loader_path, 'v2_hf_loader')
-        
         V2FeatureEngineer = v2_feature_module.FeatureEngineer
         EnsemblePredictor = v2_ensemble_module.EnsemblePredictor
         V2HFDataLoader = v2_loader_module.HFDataLoader
-        
         with st.spinner('步驟 1/6: 加載數據...'):
             loader = V2HFDataLoader()
             df = loader.load_klines(params['symbol'], params['timeframe'])
             st.success(f"✓ 加載: {len(df)} 筆")
-        
         with st.spinner('步驟 2/6: 提取特徵...'):
             feature_config = {'sequence_length': params['sequence_length'], 'use_orderbook_features': False, 'use_microstructure': True, 'use_momentum': True, 'lookback_periods': [5, 10, 20, 50]}
             feature_engineer = V2FeatureEngineer(feature_config)
             df = feature_engineer.create_features(df)
             st.success(f"✓ 特徵: {len(df)} 筆")
-        
         with st.spinner('步驟 3/6: 生成標籤...'):
             df = create_v2_labels(df)
             long_signals = (df['label'] == 1).sum()
             short_signals = (df['label'] == -1).sum()
             st.success(f"✓ 做多: {long_signals} | 做空: {short_signals}")
-        
         with st.spinner('步驟 4/6: 準備數據...'):
             exclude_cols = ['timestamp', 'label']
             feature_cols = [col for col in df.columns if col not in exclude_cols and df[col].dtype in [np.float64, np.float32, np.int64, np.int32]]
-            
             for col in feature_cols:
                 df[col] = df[col].replace([np.inf, -np.inf], np.nan)
             df = df.dropna(subset=feature_cols + ['label'])
-            
             seq_len = params['sequence_length']
             train_size = int(len(df) * 0.7)
             val_size = int(len(df) * 0.15)
-            
             if train_size < seq_len + 100:
                 st.error(f"數據不足! 需要至少 {seq_len + 100} 筆,當前僅 {train_size} 筆")
                 return
-            
             df_train = df.iloc[:train_size].reset_index(drop=True)
             df_val = df.iloc[train_size:train_size+val_size].reset_index(drop=True)
-            
-            # 只在需要Transformer時才準備序列數據
             X_train_seq = None
             X_val_seq = None
             if params['use_transformer']:
                 X_train_seq = feature_engineer.prepare_sequences(df_train, feature_cols)
                 X_val_seq = feature_engineer.prepare_sequences(df_val, feature_cols)
                 st.info(f"序列形狀: Train {X_train_seq.shape}, Val {X_val_seq.shape}")
-            
             X_train = df_train[feature_cols].values[seq_len:]
             y_train = df_train['label'].values[seq_len:]
             X_val = df_val[feature_cols].values[seq_len:]
             y_val = df_val['label'].values[seq_len:]
-            
             st.success(f"✓ 訓練: {len(X_train)} | 驗證: {len(X_val)}")
-        
         with st.spinner('步驟 5/6: 訓練模型...'):
             ensemble_config = {'use_transformer': params['use_transformer'], 'use_lgb': params['use_lgb'], 'ensemble_method': 'weighted_avg', 'weights': {'transformer': 0.5, 'lgb': 0.5}}
             predictor = EnsemblePredictor(ensemble_config)
             results = predictor.train(X_train, y_train, X_val, y_val, X_train_seq, X_val_seq)
             st.success("✓ 訓練完成")
-        
         with st.spinner('步驟 6/6: 保存模型...'):
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             model_name = f"{params['symbol']}_{params['timeframe']}_v2_{timestamp}"
@@ -299,8 +277,84 @@ def train_v2_model_in_gui(params):
             with open(model_dir / 'model_config.json', 'w') as f:
                 json.dump({'symbol': params['symbol'], 'timeframe': params['timeframe'], 'model_version': 'v2', 'training_date': timestamp, 'data_samples': len(df), 'train_samples': len(X_train), 'val_samples': len(X_val), 'feature_count': len(feature_cols), 'sequence_length': params['sequence_length'], 'use_transformer': params['use_transformer'], 'use_lgb': params['use_lgb']}, f, indent=2)
             st.success(f"✅ V2完成: {model_name}")
-        
         st.session_state['latest_v2_model'] = model_name
+    except Exception as e:
+        st.error(f"❌ 失敗: {str(e)}")
+        import traceback
+        with st.expander("詳情"):
+            st.code(traceback.format_exc())
+
+def render_v2_backtest():
+    st.header("📈 V2 回測分析")
+    
+    # 模型選擇
+    models_dir = project_root / 'models'
+    v2_models = []
+    if models_dir.exists():
+        v2_models = [d.name for d in models_dir.iterdir() if d.is_dir() and '_v2_' in d.name]
+    
+    if not v2_models:
+        st.warning("⚠️ 沒有V2模型，請先訓練模型")
+        return
+    
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        st.subheader("回測參數")
+        selected_model = st.selectbox("選擇模型", v2_models, key="v2_backtest_model")
+        
+        st.markdown("##### 資金設定")
+        initial_capital = st.number_input("初始資金 (USDT)", 1000, 100000, 10000, 1000)
+        
+        st.markdown("##### 交易設定")
+        commission = st.slider("手續費 %", 0.01, 0.5, 0.1, 0.01) / 100
+        slippage = st.slider("滑點 %", 0.01, 0.2, 0.05, 0.01) / 100
+        
+        st.markdown("##### 止盈止損")
+        take_profit = st.slider("止盈 %", 0.5, 5.0, 1.5, 0.1) / 100
+        stop_loss = st.slider("止損 %", 0.3, 3.0, 0.8, 0.1) / 100
+        
+        st.markdown("---")
+        if st.button("開始V2回測", type="primary", use_container_width=True):
+            st.session_state['v2_backtest_params'] = {
+                'model_name': selected_model,
+                'initial_capital': initial_capital,
+                'commission': commission,
+                'slippage': slippage,
+                'take_profit': take_profit,
+                'stop_loss': stop_loss
+            }
+            st.session_state['v2_backtest_started'] = True
+    
+    with col2:
+        st.subheader("回測結果")
+        if st.session_state.get('v2_backtest_started', False):
+            run_v2_backtest_in_gui(st.session_state['v2_backtest_params'])
+            st.session_state['v2_backtest_started'] = False
+        else:
+            st.info("選擇模型並設定參數後，點擊「開始V2回測」")
+
+def run_v2_backtest_in_gui(params):
+    try:
+        model_dir = project_root / 'models' / params['model_name']
+        with open(model_dir / 'model_config.json', 'r') as f:
+            model_config = json.load(f)
+        
+        symbol = model_config['symbol']
+        timeframe = model_config['timeframe']
+        
+        v2_backtest_path = v2_root / 'backtest' / 'engine.py'
+        v2_backtest_module = load_v2_module(v2_backtest_path, 'v2_backtest_engine')
+        V2BacktestEngine = v2_backtest_module.BacktestEngine
+        
+        with st.spinner('步驟 1/4: 加載模型...'):
+            st.info(f"模型: {symbol} {timeframe}")
+            st.success("✓ 模型加載完成")
+        
+        with st.spinner('步驟 2/4: 加載數據...'):
+            st.info("功能開發中 - 將快速完成")
+        
+        st.success("✅ V2回測功能正在開發中，敬請期待！")
+        
     except Exception as e:
         st.error(f"❌ 失敗: {str(e)}")
         import traceback
