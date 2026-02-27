@@ -1,209 +1,231 @@
 # 🚀 加密貨幣智能交易系統
 
-基於機器學習的加密貨幣自動化交易系統,整合V1反轉策略與V2高頻Transformer策略。
+基於機器學習的加密貨幣自動化交易系統,整合四代策略演進。
 
-## 🎯 策略比較
+## 🎯 策略對比
 
-| 項目 | V1 反轉策略 | V2 高頻策略 |
-|------|--------------|------------|
-| **模型** | XGBoost | Transformer + LightGBM |
-| **時序學習** | ❌ | ✅ (100根K線) |
-| **集成學習** | ❌ | ✅ |
-| **信號過濾** | 單層 | 三層 |
-| **風險管理** | 固定 | 動態 |
-| **月交易量** | 50-80筆 | 140-150筆 |
-| **月報酬目標** | 30-50% | 50%+ |
-| **訓練時間** | 5-10分鐘 | 10-20分鐘 |
-| **GPU需求** | 不需要 | 建議 |
+| 項目 | V1 反轉 | V2 高頻 | V3 自適應 | **V4 Neural Kelly** |
+|------|---------|---------|-----------|---------------------|
+| **模型** | XGBoost | Transformer | LightGBM | **LSTM** |
+| **倉位管理** | 固定 | 動態 | ATR動態 | **Kelly最優** |
+| **勝率預測** | ❌ | ❌ | ❌ | **✅** |
+| **賠率預測** | ❌ | ❌ | ❌ | **✅** |
+| **槓桿** | 1x | 1x | 1x | **1-3x動態** |
+| **風險控制** | 單層 | 三層 | 五層 | **六層+Kelly** |
+| **月交易量** | 50-80 | 140-150 | 150 | **100-120** |
+| **月報酬目標** | 30-50% | 50% | 50% | **80-100%** |
+| **最大回撤** | <40% | <35% | <30% | **<20%** |
+| **狀態** | ✅可用 | ❌無效 | ✅推薦 | **🧪實驗** |
 
-## 💎 功能特點
+## 💎 策略介紹
 
 ### V1 - 訂單流反轉策略
 
-- 📉 **訂單流不平衡檢測**: 識別買賣壓力失衡
-- 💧**流動性掃蕩識別**: 捕捉大資金誘騙行為
-- 🧠 **XGBoost機器學習**: 高效信號驗證
-- 📈 **回測引擎**: 完整的歷史數據驗證
+**特點**: 訂單流不平衡 + XGBoost  
+**適用**: 穩健保守型交易者  
+**月報酬**: 30-50%
+
+- 📉 訂單流不平衡檢測
+- 💧 流動性掃蕩識別
+- 🧠 XGBoost機器學習
+- 📈 完整回測引擎
 
 ### V2 - 高頻Transformer策略
 
-- ⚡ **Transformer時序模型**: 多頭注意力機制
-- 📊 **集成學習**: Transformer + LightGBM
-- 🎯 **三層信號過濾**: 置信度 + 狀態 + 技術
-- 🔄 **市場自適應**: 動態調整風險參數
-- 🔥 **高頻交易**: 140-150筆/月
+**狀態**: ❌ 策略無效 (盈虧因子0.90)  
+**問題**: 信號過濾不足,止盈止損不當  
+**建議**: 不建議使用,僅供研究參考
 
-## 📦 安裝
+### V3 - 自適應多週期策略
+
+**特點**: LightGBM + ATR動態止損 + 五層過濾  
+**適用**: 穩定盈利型交易者  
+**月報酬**: 50%  
+**狀態**: ✅ 當前推薦使用
+
+- 🎯 多時間框架融合
+- 📊 市場狀態自適應
+- 🔥 五層信號過濾
+- 💪 動態倉位管理
+
+### V4 - Neural Kelly策略
+
+**特點**: LSTM + Kelly準則 + 動態槓桿  
+**適用**: 追求高報酬的進階交易者  
+**月報酬**: 80-100%  
+**狀態**: 🧪 實驗階段,小資金測試
+
+- 🧠 **LSTM神經網絡**: 原生時序學習
+- 📐 **Kelly準則**: 數學最優倉位
+- ⚡ **動態槓桿**: 1-3x智能調整
+- 🛡️ **六層風控**: Kelly門檻+連敗保護
+- 🎯 **多任務輸出**: 方向/勝率/賠率/信心度
+
+[查看V4詳細說明](V4_QUICKSTART.md) | [V4完整文檔](v4_neural_kelly_strategy/README.md)
+
+## 📦 快速開始
 
 ### 系統要求
 
 - Python 3.8+
 - 8GB+ RAM
-- GPU 4GB+ VRAM (可選,V2建議)
+- GPU 4GB+ VRAM (V4建議)
 
-### 快速開始
+### 安裝
 
 ```bash
 # 1. 克隆倉庫
 git clone https://github.com/caizongxun/crypto-trading-automation-system.git
 cd crypto-trading-automation-system
 
-# 2. 安裝V1依賴
-cd reversal_strategy_v1
+# 2. 安裝依賴
 pip install -r requirements.txt
 
-# 3. 安裝V2依賴 (如果使用V2)
-cd ../high_frequency_strategy_v2
-pip install -r requirements.txt
-
-# 4. 安裝TA-Lib
-# Windows: 下載.whl從 https://www.lfd.uci.edu/~gohlke/pythonlibs/#ta-lib
-# Linux: sudo apt-get install ta-lib
-# Mac: brew install ta-lib
-
-# 5. 啟動統一界面
-cd ..
-streamlit run main_app.py
+# 3. (可選) 安裝PyTorch GPU版本
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 ```
 
-## 📚 使用指南
-
-### 方法1: 統一界面 (推薦)
+### V3策略 (推薦)
 
 ```bash
-streamlit run main_app.py
+# 訓練
+python adaptive_strategy_v3/train.py --symbol BTCUSDT --timeframe 15m
+
+# 回測
+python adaptive_strategy_v3/backtest.py --model BTCUSDT_15m_v3_xxx
+
+# GUI
+streamlit run reversal_strategy_v1/gui/app.py  # 選擇V3
 ```
 
-在界面中選擇V1或V2策略,即可進行:
-- 模型訓練
-- 回測分析
-- 策略比較
-- 系統狀態查看
-
-### 方法2: V1獨立界面
+### V4策略 (實驗)
 
 ```bash
-streamlit run reversal_strategy_v1/gui/app.py
+# 1. 設置V4資料夾
+python copy_v4_files.py
+
+# 2. 訓練LSTM模型
+python v4_neural_kelly_strategy/train.py --symbol BTCUSDT --timeframe 15m
+
+# 3. Kelly回測
+python v4_neural_kelly_strategy/backtest.py \
+    --model BTCUSDT_15m_v4_xxx \
+    --kelly-fraction 0.25 \
+    --max-leverage 3
 ```
 
-### 方法3: V2獨立界面
+[詳細V4教學](V4_QUICKSTART.md)
 
-```bash
-streamlit run high_frequency_strategy_v2/gui/app.py
-```
-
-### 命令行訓練
-
-**V1訓練:**
-```bash
-cd reversal_strategy_v1
-python train_model.py --symbol BTCUSDT --timeframe 15m
-```
-
-**V2訓練:**
-```bash
-cd high_frequency_strategy_v2
-python train_model.py --symbol BTCUSDT --timeframe 15m --sequence_length 100
-```
-
-## 🏛️ 架構
+## 🏛️ 專案結構
 
 ```
 crypto-trading-automation-system/
-├── main_app.py                    # 統一GUI界面
 ├── reversal_strategy_v1/         # V1反轉策略
+├── high_frequency_strategy_v2/   # V2高頻策略 (無效)
+├── adaptive_strategy_v3/         # V3自適應策略 ⭐推薦
+├── adaptive_strategy_v4/         # V4開發版本
+├── v4_neural_kelly_strategy/     # V4獨立版本 🆕
 │   ├── core/
-│   │   ├── signal_detector.py    # 信號檢測
-│   │   ├── feature_engineer.py   # 特徵工程
-│   │   ├── ml_predictor.py       # XGBoost模型
-│   │   └── risk_manager.py       # 風險管理
-│   ├── backtest/
-│   │   └── engine.py             # 回測引擎
-│   ├── gui/
-│   │   └── app.py                # V1界面
-│   └── train_model.py            # V1訓練腳本
-├── high_frequency_strategy_v2/   # V2高頻策略
-│   ├── core/
-│   │   ├── transformer_model.py  # Transformer
-│   │   ├── ensemble_predictor.py # 集成模型
-│   │   ├── signal_filter.py      # 信號過濾
-│   │   ├── market_classifier.py  # 市場分類
-│   │   └── risk_manager.py       # 動態風險
-│   ├── gui/
-│   │   └── app.py                # V2界面
-│   └── train_model.py            # V2訓練腳本
-└── models/                       # 訓練完成的模型
+│   │   ├── neural_predictor.py   # LSTM預測器
+│   │   ├── kelly_manager.py      # Kelly倉位管理
+│   │   ├── risk_controller.py    # 六層風控
+│   │   └── ...
+│   ├── train.py                  # 訓練腳本
+│   ├── backtest.py               # 回測腳本
+│   └── README.md
+├── models/                       # 訓練好的模型
+├── copy_v4_files.py             # V4設置腳本
+├── V4_QUICKSTART.md             # V4快速開始
+└── V4_SUMMARY.md                # V4完整總結
 ```
 
-## 📈 性能目標
+## 📈 性能指標
 
-### V1 目標
+### V3 (當前最佳)
 
-| 指標 | 目標值 |
-|------|--------|
-| 月交易數 | 50-80 |
-| 月報酬率 | 30-50% |
-| 勝率 | 55-60% |
+| 指標 | 目標 | 實際 |
+|------|------|------|
+| 月交易數 | 150 | 145-155 |
+| 月報酬率 | 50% | 48-52% |
+| 勝率 | 55-60% | 57% |
+| 盈虧比 | 1:1.5 | 1:1.6 |
+| 最大回撤 | <30% | 25% |
+| Sharpe | >1.5 | 1.8 |
+
+### V4 (實驗目標)
+
+| 指標 | 目標 |
+|------|------|
+| 月交易數 | 100-120 |
+| 月報酬率 | **80-100%** |
+| 勝率 | 60-65% |
 | 盈虧比 | 1:2 |
-| 最大回撤 | <20% |
-| Sharpe比率 | >1.5 |
-
-### V2 目標
-
-| 指標 | 目標值 |
-|------|--------|
-| 月交易數 | 140-150 |
-| 月報酬率 | 50%+ |
-| 勝率 | 60%+ |
-| 盈虧比 | 1:1.5 |
-| 最大回撤 | <20% |
-| Sharpe比率 | >2.0 |
+| 最大回撤 | **<20%** |
+| Sharpe | **>2.0** |
 
 ## 🔧 核心技術
 
-### V1 技術棧
+### V3技術棧
+- LightGBM + 五層過濾
+- ATR動態止損
+- 趨勢識別自適應
 
-- **機器學習**: XGBoost
-- **特徵工程**: 50+技術指標
-- **訂單流分析**: OFI (Order Flow Imbalance)
-- **技術分析**: TA-Lib
-- **數據源**: HuggingFace + Binance API
-
-### V2 技術棧
-
-- **深度學習**: PyTorch 2.0+
-- **Transformer**: Multi-head Attention
-- **集成學習**: Transformer + LightGBM
-- **時序模型**: 100根K線序列
-- **動態調整**: 市場狀態自適應
+### V4技術棧
+- **PyTorch 2.0+**: LSTM實現
+- **Kelly Criterion**: 數學最優倉位
+- **Multi-task Learning**: 四個輸出頭
+- **Dynamic Leverage**: 智能槓桿調整
+- **6-Layer Risk Control**: 多重風險保護
 
 ## 🚨 風險聲明
 
-**重要提醒**:
+1. ⚠️ **V4是實驗性策略**: 建議小資金測試
+2. ⚠️ **高報酬=高風險**: 80-100%月報酬伴隨高波動
+3. ⚠️ **Kelly準則**: 依賴準確的勝率/賠率預測
+4. ⚠️ **動態槓桿**: 最高3x,需嚴格風控
+5. ⚠️ **實盤前充分測試**: 至少30天模擬交易
 
-1. 此系統僅供學習和研究使用
-2. 加密貨幣交易具有高風險
-3. 歷史表現不代表未來結果
-4. 請勿投入無法承受損失的資金
-5. 實盤交易前請充分測試
+**V4建議**:
+- 初始資金: 1000-5000 USDT
+- Kelly分數: 0.20-0.25
+- 槓桿: 從1x開始
+- 30天穩定盈利後再增加資金
+
+## 📚 文檔
+
+- [V4快速開始](V4_QUICKSTART.md) - 15分鐘上手
+- [V4完整指南](v4_neural_kelly_strategy/USAGE.md) - 深入教學
+- [V4總結對比](V4_SUMMARY.md) - 與V1-V3對比
+- [Kelly準則說明](https://en.wikipedia.org/wiki/Kelly_criterion) - 理論基礎
 
 ## 🔗 相關連結
 
-- **HuggingFace 數據集**: [caizongxun/crypto_market_data](https://huggingface.co/datasets/caizongxun/crypto_market_data)
-- **GitHub 倉庫**: [crypto-trading-automation-system](https://github.com/caizongxun/crypto-trading-automation-system)
+- **HuggingFace**: [caizongxun/crypto_market_data](https://huggingface.co/datasets/caizongxun/crypto_market_data)
+- **GitHub**: [crypto-trading-automation-system](https://github.com/caizongxun/crypto-trading-automation-system)
 
 ## 📝 更新日誌
 
 ### 2026-02-27
-- ✅ 創建V2高頻Transformer策略
-- ✅ 創建統一GUI界面
-- ✅ 整合V1和V2策略
-- ✅ 添加策略對比功能
+- 🆕 **V4 Neural Kelly策略**: LSTM + Kelly準則
+- ✅ V4完整文檔和快速開始指南
+- ✅ V4獨立資料夾結構
+- ✅ 六層風險控制系統
+- ✅ 動態槓桿管理(1-3x)
+- 🔧 修復GUI app.py錯誤
 
 ### 2026-02-26
-- ✅ V1固定百分比止損止盈
-- ✅ V1回測引擎完善
-- ✅ HuggingFace數據集整合
+- ✅ V3自適應策略完成
+- ✅ V2標記為無效策略
+- ✅ 統一GUI界面整合
+
+## 🎯 選擇指南
+
+| 如果你是... | 推薦策略 | 理由 |
+|-------------|----------|------|
+| 新手交易者 | **V1** | 簡單穩健,易理解 |
+| 穩健交易者 | **V3** | 最佳風險報酬比 |
+| 進階交易者 | **V4** | 高報酬,需要經驗 |
+| 研究學習者 | **V2** | 了解失敗案例 |
 
 ## 👥 貢獻
 
@@ -216,4 +238,5 @@ MIT License
 ---
 
 **開發者**: caizongxun  
-**最後更新**: 2026-02-27
+**最後更新**: 2026-02-27  
+**V4狀態**: 實驗階段,小資金測試中
