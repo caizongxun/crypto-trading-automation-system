@@ -8,6 +8,7 @@ from typing import Dict, Tuple, List
 import lightgbm as lgb
 from pathlib import Path
 import joblib
+import importlib.util
 
 class EnsemblePredictor:
     """集成多個模型的預測器"""
@@ -25,6 +26,23 @@ class EnsemblePredictor:
         
         self.transformer_model = None
         self.lgb_model = None
+    
+    def _load_transformer_module(self):
+        """動態加載Transformer模組"""
+        try:
+            # 嘗試相對引用
+            from .transformer_model import TransformerTrainer
+            return TransformerTrainer
+        except ImportError:
+            # 如果相對引用失敗，使用絕對路徑
+            transformer_path = Path(__file__).parent / 'transformer_model.py'
+            if transformer_path.exists():
+                spec = importlib.util.spec_from_file_location('transformer_model', transformer_path)
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                return module.TransformerTrainer
+            else:
+                raise ImportError(f"Cannot find transformer_model.py at {transformer_path}")
     
     def train(self, X_train: np.ndarray, y_train: np.ndarray,
              X_val: np.ndarray, y_val: np.ndarray,
@@ -62,31 +80,38 @@ class EnsemblePredictor:
             )
             
             results['lgb_trained'] = True
+            print("✓ LightGBM訓練完成")
         
         # 訓練Transformer (如果提供了序列數據)
         if self.use_transformer and X_train_seq is not None:
             print("\n訓練 Transformer...")
-            from .transformer_model import TransformerTrainer
-            
-            transformer_config = {
-                'feature_dim': X_train_seq.shape[2],
-                'd_model': 128,
-                'nhead': 8,
-                'num_layers': 4,
-                'dim_feedforward': 512,
-                'dropout': 0.1,
-                'learning_rate': 0.001
-            }
-            
-            self.transformer_model = TransformerTrainer(transformer_config)
-            history = self.transformer_model.train(
-                X_train_seq, y_train,
-                X_val_seq, y_val,
-                epochs=50, batch_size=64
-            )
-            
-            results['transformer_trained'] = True
-            results['transformer_history'] = history
+            try:
+                TransformerTrainer = self._load_transformer_module()
+                
+                transformer_config = {
+                    'feature_dim': X_train_seq.shape[2],
+                    'd_model': 128,
+                    'nhead': 8,
+                    'num_layers': 4,
+                    'dim_feedforward': 512,
+                    'dropout': 0.1,
+                    'learning_rate': 0.001
+                }
+                
+                self.transformer_model = TransformerTrainer(transformer_config)
+                history = self.transformer_model.train(
+                    X_train_seq, y_train,
+                    X_val_seq, y_val,
+                    epochs=50, batch_size=64
+                )
+                
+                results['transformer_trained'] = True
+                results['transformer_history'] = history
+                print("✓ Transformer訓練完成")
+            except Exception as e:
+                print(f"⚠️ Transformer訓練失敗: {str(e)}")
+                print("繼續使用僅LightGBM模式")
+                results['transformer_trained'] = False
         
         return results
     
@@ -143,8 +168,11 @@ class EnsemblePredictor:
             self.lgb_model = lgb.Booster(model_file=str(path / 'lgb_model.txt'))
         
         if (path / 'transformer_model.pt').exists():
-            from .transformer_model import TransformerTrainer
-            import torch
-            checkpoint = torch.load(path / 'transformer_model.pt')
-            self.transformer_model = TransformerTrainer(checkpoint['config'])
-            self.transformer_model.load(path)
+            try:
+                TransformerTrainer = self._load_transformer_module()
+                import torch
+                checkpoint = torch.load(path / 'transformer_model.pt')
+                self.transformer_model = TransformerTrainer(checkpoint['config'])
+                self.transformer_model.load(path)
+            except Exception as e:
+                print(f"⚠️ Transformer模型加載失敗: {str(e)}")
