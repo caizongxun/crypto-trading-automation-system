@@ -30,11 +30,9 @@ class EnsemblePredictor:
     def _load_transformer_module(self):
         """動態加載Transformer模組"""
         try:
-            # 嘗試相對引用
             from .transformer_model import TransformerTrainer
             return TransformerTrainer
         except ImportError:
-            # 如果相對引用失敗，使用絕對路徑
             transformer_path = Path(__file__).parent / 'transformer_model.py'
             if transformer_path.exists():
                 spec = importlib.util.spec_from_file_location('transformer_model', transformer_path)
@@ -67,6 +65,7 @@ class EnsemblePredictor:
                 'verbose': -1
             }
             
+            # 標籤轉換: -1,0,1 -> 0,1,2
             train_data = lgb.Dataset(X_train, label=y_train + 1)
             val_data = lgb.Dataset(X_val, label=y_val + 1, reference=train_data)
             
@@ -116,15 +115,27 @@ class EnsemblePredictor:
         return results
     
     def predict(self, X: np.ndarray, X_seq: np.ndarray = None) -> Tuple[np.ndarray, np.ndarray]:
-        """集成預測"""
+        """
+        集成預測
+        
+        Returns:
+            predictions: -1 (做空), 0 (中立), 1 (做多)
+            confidences: 信心度 (0-1)
+        """
         predictions = []
         confidences = []
         
         # LightGBM預測
         if self.lgb_model is not None:
-            lgb_probs = self.lgb_model.predict(X)
-            lgb_pred = np.argmax(lgb_probs, axis=1) - 1
+            lgb_probs = self.lgb_model.predict(X)  # shape: (n_samples, 3)
+            # 類別 0,1,2 對應 -1,0,1
+            lgb_pred = np.argmax(lgb_probs, axis=1) - 1  # 轉換回 -1,0,1
             lgb_conf = np.max(lgb_probs, axis=1)
+            
+            # 信心度過濾: 只有高信心度才交易
+            confidence_threshold = 0.5  # 50%信心度
+            lgb_pred = np.where(lgb_conf >= confidence_threshold, lgb_pred, 0)
+            
             predictions.append(lgb_pred * self.weights['lgb'])
             confidences.append(lgb_conf * self.weights['lgb'])
         
@@ -145,6 +156,9 @@ class EnsemblePredictor:
         else:
             final_pred = predictions[0]
             final_conf = confidences[0]
+        
+        # 確保輸出範圍在 -1, 0, 1
+        final_pred = np.clip(final_pred, -1, 1)
         
         return final_pred, final_conf
     
