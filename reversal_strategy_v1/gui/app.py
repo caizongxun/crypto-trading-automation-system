@@ -63,8 +63,8 @@ def main():
                 st.metric("月報酬目標", "30-50%")
         else:
             st.subheader("⚡ V2 特點")
-            st.caption("Transformer + 集成學習")
-            st.info("Transformer時序學習\n多時間框架特徵\n三層信號過濾\n市場狀態自適應")
+            st.caption("LightGBM / Transformer + 集成學習")
+            st.info("LightGBM快速訓練\n可選Transformer時序\n多時間框架特徵\n市場狀態自適應")
             col1, col2 = st.columns(2)
             with col1:
                 st.metric("月交易目標", "140-150筆")
@@ -87,7 +87,7 @@ def show_strategy_comparison():
         comparison_df = pd.DataFrame({
             '項目': ['模型架構', '時序學習', '集成學習', '信號過濾', '風險管理', '市場自適應', '月交易量', '月報酬目標', '訓練時間', 'GPU需求'],
             'V1 反轉策略': ['XGBoost', '✘', '✘', '單層', '固定', '✘', '50-80筆', '30-50%', '5-10分鐘', '不需要'],
-            'V2 高頻策略': ['Transformer + LightGBM', '✓ (100根K線)', '✓ (加權集成)', '三層過濾', '動態調整', '✓', '140-150筆', '50%+', '10-20分鐘', '建議使用']
+            'V2 高頻策略': ['LightGBM/Transformer', '✓ (可選)', '✓ (加權集成)', '三層過濾', '動態調整', '✓', '140-150筆', '50%+', '5-15分鐘', '可選']
         })
         st.table(comparison_df)
         if st.button("關閉對比", use_container_width=True):
@@ -186,7 +186,7 @@ def train_v1_model_in_gui(params):
             st.code(traceback.format_exc())
 
 def render_v2_training():
-    st.header("🧠 V2 Transformer模型訓練")
+    st.header("🧠 V2 模型訓練")
     col1, col2 = st.columns([1, 2])
     with col1:
         st.subheader("訓練參數")
@@ -194,12 +194,22 @@ def render_v2_training():
         timeframe = st.selectbox("時間框架", ["15m", "1h"], index=0, key="v2_train_timeframe")
         st.markdown("---")
         sequence_length = st.slider("序列長度", 50, 200, 100, 10, help="Transformer輸入K線數")
-        use_transformer = st.checkbox("Transformer模型", value=True)
-        use_lgb = st.checkbox("LightGBM模型", value=True)
-        if use_transformer and use_lgb:
-            st.caption("✓ 集成模式")
+        
+        st.markdown("##### 模型選擇")
+        use_lgb = st.checkbox("LightGBM模型", value=True, help="快速訓練，低記憶體")
+        use_transformer = st.checkbox("Transformer模型", value=False, help="時序學習，需要更多記憶體")
+        
+        if not use_lgb and not use_transformer:
+            st.warning("⚠️ 至少選擇一個模型")
+        elif use_transformer and use_lgb:
+            st.info("✓ 集成模式 (最佳效果)")
+        elif use_lgb:
+            st.success("✓ LightGBM模式 (快速訓練)")
+        else:
+            st.info("✓ Transformer模式 (時序學習)")
+        
         st.markdown("---")
-        if st.button("開始V2訓練", type="primary", use_container_width=True):
+        if st.button("開始V2訓練", type="primary", use_container_width=True, disabled=(not use_lgb and not use_transformer)):
             st.session_state['v2_training_params'] = {'symbol': symbol, 'timeframe': timeframe, 'sequence_length': sequence_length, 'use_transformer': use_transformer, 'use_lgb': use_lgb}
             st.session_state['v2_training_started'] = True
     with col2:
@@ -208,7 +218,7 @@ def render_v2_training():
             train_v2_model_in_gui(st.session_state['v2_training_params'])
             st.session_state['v2_training_started'] = False
         else:
-            st.info("### V2 Transformer訓練\n\n1. 加載HuggingFace K線\n2. 50+指標 + 微觀結構\n3. 100根K線序列\n4. Transformer + LightGBM\n5. 加權集成\n\n**預計**: 10-20分鐘")
+            st.info("### V2 訓練流程\n\n1. 加載HuggingFace K線\n2. 50+指標 + 微觀結構\n3. 100根K線序列\n4. LightGBM / Transformer\n5. 加權集成\n\n**預計**: \n- LightGBM: 5分鐘\n- Transformer: 15分鐘\n- 集成: 20分鐘")
 
 def train_v2_model_in_gui(params):
     try:
@@ -260,8 +270,13 @@ def train_v2_model_in_gui(params):
             df_train = df.iloc[:train_size].reset_index(drop=True)
             df_val = df.iloc[train_size:train_size+val_size].reset_index(drop=True)
             
-            X_train_seq = feature_engineer.prepare_sequences(df_train, feature_cols)
-            X_val_seq = feature_engineer.prepare_sequences(df_val, feature_cols)
+            # 只在需要Transformer時才準備序列數據
+            X_train_seq = None
+            X_val_seq = None
+            if params['use_transformer']:
+                X_train_seq = feature_engineer.prepare_sequences(df_train, feature_cols)
+                X_val_seq = feature_engineer.prepare_sequences(df_val, feature_cols)
+                st.info(f"序列形狀: Train {X_train_seq.shape}, Val {X_val_seq.shape}")
             
             X_train = df_train[feature_cols].values[seq_len:]
             y_train = df_train['label'].values[seq_len:]
@@ -269,7 +284,6 @@ def train_v2_model_in_gui(params):
             y_val = df_val['label'].values[seq_len:]
             
             st.success(f"✓ 訓練: {len(X_train)} | 驗證: {len(X_val)}")
-            st.info(f"序列形狀: Train {X_train_seq.shape}, Val {X_val_seq.shape}")
         
         with st.spinner('步驟 5/6: 訓練模型...'):
             ensemble_config = {'use_transformer': params['use_transformer'], 'use_lgb': params['use_lgb'], 'ensemble_method': 'weighted_avg', 'weights': {'transformer': 0.5, 'lgb': 0.5}}
@@ -283,7 +297,7 @@ def train_v2_model_in_gui(params):
             model_dir = project_root / 'models' / model_name
             predictor.save(model_dir)
             with open(model_dir / 'model_config.json', 'w') as f:
-                json.dump({'symbol': params['symbol'], 'timeframe': params['timeframe'], 'model_version': 'v2', 'training_date': timestamp, 'data_samples': len(df), 'train_samples': len(X_train), 'val_samples': len(X_val), 'feature_count': len(feature_cols), 'sequence_length': params['sequence_length']}, f, indent=2)
+                json.dump({'symbol': params['symbol'], 'timeframe': params['timeframe'], 'model_version': 'v2', 'training_date': timestamp, 'data_samples': len(df), 'train_samples': len(X_train), 'val_samples': len(X_val), 'feature_count': len(feature_cols), 'sequence_length': params['sequence_length'], 'use_transformer': params['use_transformer'], 'use_lgb': params['use_lgb']}, f, indent=2)
             st.success(f"✅ V2完成: {model_name}")
         
         st.session_state['latest_v2_model'] = model_name
