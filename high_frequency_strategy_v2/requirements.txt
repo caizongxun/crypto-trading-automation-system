@@ -1,0 +1,31 @@
+# V2 High-Frequency Trading Strategy Requirements
+
+# Core
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Machine Learning
+lightgbm>=4.0.0
+torch>=2.0.0
+scikit-learn>=1.3.0
+
+# Technical Analysis
+TA-Lib>=0.4.28
+
+# Data
+datasets>=2.14.0
+huggingface_hub>=0.17.0
+
+# API
+requests>=2.31.0
+
+# Utilities
+joblib>=1.3.0
+python-dateutil>=2.8.2
+
+# GUI
+streamlit>=1.28.0
+plotly>=5.17.0
+
+# Optional: GPU Support
+# torch-cuda>=12.1  # 如果使用CUDA
