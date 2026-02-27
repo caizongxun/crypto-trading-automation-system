@@ -237,6 +237,8 @@ def train_v2_model_in_gui(params):
             df = create_v2_labels(df)
             long_signals = (df['label'] == 1).sum()
             short_signals = (df['label'] == -1).sum()
+            neutral_signals = (df['label'] == 0).sum()
+            st.info(f"📊 訓練標籤分布: 做多={long_signals} ({long_signals/len(df)*100:.1f}%) | 做空={short_signals} ({short_signals/len(df)*100:.1f}%) | 中立={neutral_signals} ({neutral_signals/len(df)*100:.1f}%)")
             st.success(f"✓ 做多: {long_signals} | 做空: {short_signals}")
         with st.spinner('步驟 4/6: 準備數據...'):
             exclude_cols = ['timestamp', 'label']
@@ -301,12 +303,14 @@ def render_v2_backtest():
         st.markdown("##### 交易設定")
         commission = st.slider("手續費 %", 0.01, 0.5, 0.1, 0.01) / 100
         slippage = st.slider("滑點 %", 0.01, 0.2, 0.05, 0.01) / 100
+        st.markdown("##### 信心度設定")
+        confidence_threshold = st.slider("信心度閾值", 0.1, 0.9, 0.35, 0.05, help="只有預測信心度高於此閾值才交易")
         st.markdown("##### 止盈止損")
         take_profit = st.slider("止盈 %", 0.5, 5.0, 1.5, 0.1) / 100
         stop_loss = st.slider("止損 %", 0.3, 3.0, 0.8, 0.1) / 100
         st.markdown("---")
         if st.button("開始V2回測", type="primary", use_container_width=True):
-            st.session_state['v2_backtest_params'] = {'model_name': selected_model, 'initial_capital': initial_capital, 'commission': commission, 'slippage': slippage, 'take_profit': take_profit, 'stop_loss': stop_loss}
+            st.session_state['v2_backtest_params'] = {'model_name': selected_model, 'initial_capital': initial_capital, 'commission': commission, 'slippage': slippage, 'take_profit': take_profit, 'stop_loss': stop_loss, 'confidence_threshold': confidence_threshold}
             st.session_state['v2_backtest_started'] = True
     with col2:
         st.subheader("回測結果")
@@ -314,7 +318,7 @@ def render_v2_backtest():
             run_v2_backtest_in_gui(st.session_state['v2_backtest_params'])
             st.session_state['v2_backtest_started'] = False
         else:
-            st.info("選擇模型並設定參數後，點擊「開始V2回測」")
+            st.info("選擇模型並設定參數後，點擊「開始V2回測」\n\n**建議**:\n- 如果模型不產生信號，試著降低信心度閾值至 0.3-0.4")
 
 def run_v2_backtest_in_gui(params):
     try:
@@ -343,7 +347,8 @@ def run_v2_backtest_in_gui(params):
         with st.spinner('步驟 1/5: 加載模型...'):
             predictor = EnsemblePredictor({})
             predictor.load(model_dir)
-            st.success(f"✓ 模型: {symbol} {timeframe}")
+            predictor.confidence_threshold = params['confidence_threshold']
+            st.success(f"✓ 模型: {symbol} {timeframe} | 信心度: {params['confidence_threshold']:.0%}")
         
         with st.spinner('步驟 2/5: 加載數據...'):
             loader = V2HFDataLoader()
@@ -372,7 +377,9 @@ def run_v2_backtest_in_gui(params):
             long_count = (predictions == 1).sum()
             short_count = (predictions == -1).sum()
             neutral_count = (predictions == 0).sum()
-            st.info(f"信號統計: 做多={long_count} ({long_count/len(predictions)*100:.1f}%) | 做空={short_count} ({short_count/len(predictions)*100:.1f}%) | 中立={neutral_count} ({neutral_count/len(predictions)*100:.1f}%)")
+            st.info(f"📊 信號統計: 做多={long_count} ({long_count/len(predictions)*100:.1f}%) | 做空={short_count} ({short_count/len(predictions)*100:.1f}%) | 中立={neutral_count} ({neutral_count/len(predictions)*100:.1f}%)")
+            avg_conf = confidences[predictions != 0].mean() if len(confidences[predictions != 0]) > 0 else 0
+            st.info(f"🎯 平均信心度: {avg_conf:.1%}")
             st.success(f"✓ 預測: {len(predictions)} 筆")
         
         with st.spinner('步驟 5/5: 執行回測...'):
@@ -386,8 +393,8 @@ def run_v2_backtest_in_gui(params):
         
         if 'error' in metrics:
             st.error(f"⚠️ {metrics['error']}")
-            st.warning("模型不產生交易信號，請檢查:")
-            st.info("1. 模型訓練是否完成\n2. 模型配置是否正確\n3. 回測參數設定")
+            st.warning("模型不產生交易信號，建議:")
+            st.info("1. 降低信心度閾值至 0.3-0.4\n2. 檢查訓練標籤分布是否平衡\n3. 調整訓練參數 (profit_threshold, stop_loss)")
             return
         
         col1, col2, col3, col4 = st.columns(4)
