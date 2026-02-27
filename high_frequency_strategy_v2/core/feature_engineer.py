@@ -29,6 +29,11 @@ class FeatureEngineer:
         df = self._add_time_features(df)
         df = self._add_volatility_regime(df)
         df = df.dropna()
+        
+        # 轉揟float32節省記憶體 (50%)
+        float_cols = df.select_dtypes(include=['float64']).columns
+        df[float_cols] = df[float_cols].astype('float32')
+        
         return df
     
     def _add_price_features(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -133,27 +138,35 @@ class FeatureEngineer:
     
     def prepare_sequences(self, df: pd.DataFrame, feature_cols: List[str]) -> np.ndarray:
         """
-        準備時序數據用於Transformer (向量化優化)
+        準備時序數據用於Transformer (向量化優化 + 記憶體優化)
         
         Args:
             df: DataFrame包含特徵
             feature_cols: 特徵列名列表
         
         Returns:
-            np.ndarray: shape (n_samples, sequence_length, n_features)
+            np.ndarray: shape (n_samples, sequence_length, n_features), dtype=float32
         """
         print(f"  準備序列數據: {len(df)} 筆, 序列長度={self.sequence_length}")
         
-        # 提取特徵矩陣
-        feature_matrix = df[feature_cols].values
+        # 提取特徵矩陣 (使用float32節省記憶體)
+        feature_matrix = df[feature_cols].values.astype(np.float32)
         n_samples = len(feature_matrix) - self.sequence_length + 1
         n_features = len(feature_cols)
         
         if n_samples <= 0:
             raise ValueError(f"數據不足以建立序列: {len(feature_matrix)} < {self.sequence_length}")
         
-        # 使用向量化操作建立滾動窗口 (比循環快100倍)
-        # 使用numpy.lib.stride_tricks.as_strided進行高效切片
+        # 計算預期記憶體使用
+        expected_memory_gb = (n_samples * self.sequence_length * n_features * 4) / (1024**3)
+        print(f"  預期記憶體: {expected_memory_gb:.2f} GB")
+        
+        # 如果超過4GB，使用批次處理
+        if expected_memory_gb > 4.0:
+            print(f"  警告: 記憶體需求過大，使用批次處理")
+            return self._prepare_sequences_batched(feature_matrix, n_samples, n_features)
+        
+        # 使用向量化操作建立滾動窗口
         from numpy.lib.stride_tricks import as_strided
         
         shape = (n_samples, self.sequence_length, n_features)
@@ -161,6 +174,33 @@ class FeatureEngineer:
         
         sequences = as_strided(feature_matrix, shape=shape, strides=strides)
         
-        print(f"  ✓ 序列數據形狀: {sequences.shape}")
+        print(f"  ✓ 序列數據形狀: {sequences.shape}, dtype={sequences.dtype}")
         
         return sequences.copy()  # copy以確保數據獨立
+    
+    def _prepare_sequences_batched(self, feature_matrix: np.ndarray, 
+                                   n_samples: int, n_features: int) -> np.ndarray:
+        """批次處理大型數據集"""
+        print(f"  使用批次處理模式")
+        
+        # 分成20個批次處理
+        batch_size = max(1000, n_samples // 20)
+        sequences_list = []
+        
+        for start_idx in range(0, n_samples, batch_size):
+            end_idx = min(start_idx + batch_size, n_samples)
+            
+            batch_sequences = []
+            for i in range(start_idx, end_idx):
+                seq = feature_matrix[i:i+self.sequence_length]
+                batch_sequences.append(seq)
+            
+            sequences_list.append(np.array(batch_sequences, dtype=np.float32))
+            
+            if (start_idx // batch_size) % 5 == 0:
+                print(f"    處理進度: {end_idx}/{n_samples} ({100*end_idx/n_samples:.1f}%)")
+        
+        sequences = np.concatenate(sequences_list, axis=0)
+        print(f"  ✓ 序列數據形狀: {sequences.shape}, dtype={sequences.dtype}")
+        
+        return sequences
