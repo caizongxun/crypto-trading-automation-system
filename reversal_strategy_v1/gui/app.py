@@ -11,6 +11,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime
 import numpy as np
+import importlib.util
 
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
@@ -33,6 +34,13 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+def load_v2_module(module_path, module_name):
+    """動態加載V2模組"""
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 def main():
     st.title("🚀 加密貨幣智能交易系統")
@@ -278,7 +286,7 @@ def render_v1_training():
             2. **信號檢測**: 訂單流不平衡 + 流動性掃蕩
             3. **特徵工程**: 提取50+個技術指標
             4. **標籤生成**: 前瞻窗口盈虧標籤
-            5. **模型訓練**: XGBoost機器學翔
+            5. **模型訓練**: XGBoost機器學習
             6. **模型驗證**: 訓練集/驗證集/OOS測試
             
             **預計時間**: 5-10分鐘
@@ -471,13 +479,19 @@ def render_v2_training():
 def train_v2_model_in_gui(params):
     """在GUI中直接執行V2訓練"""
     try:
-        # 動態引用V2模組
-        sys.path.insert(0, str(v2_root / 'core'))
-        sys.path.insert(0, str(v2_root / 'data'))
+        # 使用絕對路徑引用V2模組
+        v2_feature_path = v2_root / 'core' / 'feature_engineer.py'
+        v2_ensemble_path = v2_root / 'core' / 'ensemble_predictor.py'
+        v2_loader_path = v2_root / 'data' / 'hf_loader.py'
         
-        from core.feature_engineer import FeatureEngineer as V2FeatureEngineer
-        from core.ensemble_predictor import EnsemblePredictor
-        from data.hf_loader import HFDataLoader as V2HFDataLoader
+        # 加載V2模組
+        v2_feature_module = load_v2_module(v2_feature_path, 'v2_feature_engineer')
+        v2_ensemble_module = load_v2_module(v2_ensemble_path, 'v2_ensemble_predictor')
+        v2_loader_module = load_v2_module(v2_loader_path, 'v2_hf_loader')
+        
+        V2FeatureEngineer = v2_feature_module.FeatureEngineer
+        EnsemblePredictor = v2_ensemble_module.EnsemblePredictor
+        V2HFDataLoader = v2_loader_module.HFDataLoader
         
         with st.spinner('步驟 1/6: 加載歷史數據...'):
             loader = V2HFDataLoader()
