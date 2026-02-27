@@ -1,6 +1,6 @@
 """
-Reversal Strategy V1 - Streamlit GUI
-反轉策略交易系統主界面
+Unified Trading System - V1 & V2 Integrated GUI
+統一交易系統 - V1和V2整合界面
 """
 import streamlit as st
 import sys
@@ -10,9 +10,14 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime
+import subprocess
 
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
+
+# 添加V2路徑
+v2_root = project_root.parent / 'high_frequency_strategy_v2'
+sys.path.insert(0, str(v2_root))
 
 from core.signal_detector import SignalDetector
 from core.feature_engineer import FeatureEngineer
@@ -22,64 +27,191 @@ from backtest.engine import BacktestEngine
 from data.hf_loader import HFDataLoader
 
 st.set_page_config(
-    page_title="反轉交易系統",
-    page_icon="📈",
+    page_title="加密貨幣交易系統",
+    page_icon="🚀",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 def main():
-    st.title("加密貨幣反轉交易系統")
+    st.title("🚀 加密貨幣智能交易系統")
     
     with st.sidebar:
-        st.header("系統配置")
+        st.header("策略選擇")
         
-        version = st.selectbox(
-            "策略版本",
-            ["V1 - 訂單流反轉策略", "V2 - 即將推出", "V3 - 即將推出"],
-            index=0
+        strategy_version = st.radio(
+            "選擇策略版本",
+            [
+                "V1 - 訂單流反轉策略",
+                "V2 - 高頻Transformer策略"
+            ],
+            index=0,
+            help="V1適合中頻交易(50-80筆/月)，V2適合高頻交易(140-150筆/月)"
         )
         
         st.markdown("---")
-        st.subheader("當前版本: V1")
-        st.caption("訂單流不平衡與流動性區域策略")
+        
+        if "V1" in strategy_version:
+            st.subheader("🔵 V1 特點")
+            st.caption("訂單流不平衡 + XGBoost")
+            st.info(
+                "訂單流不平衡檢測\n"
+                "流動性掃蕩識別\n"
+                "市場微觀結構分析\n"
+                "XGBoost機器學習"
+            )
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("月交易目標", "50-80筆")
+            with col2:
+                st.metric("月報酬目標", "30-50%")
+        else:
+            st.subheader("⚡ V2 特點")
+            st.caption("Transformer + 集成學習")
+            st.info(
+                "Transformer時序學習\n"
+                "多時間框架特徵\n"
+                "三層信號過濾\n"
+                "市場狀態自適應"
+            )
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("月交易目標", "140-150筆")
+            with col2:
+                st.metric("月報酬目標", "50%+")
         
         st.markdown("---")
-        st.info(
-            "**V1 策略特點:**\n\n"
-            "訂單流不平衡檢測\n"
-            "流動性掃蕩識別\n"
-            "市場微觀結構分析\n"
-            "機器學習信號驗證"
-        )
+        
+        if st.button("📊 查看V1 vs V2對比", use_container_width=True):
+            st.session_state['show_comparison'] = True
     
-    if "V1" in version:
-        tab1, tab2, tab3, tab4, tab5 = st.tabs([
-            "模型訓練",
-            "回測分析",
-            "模擬交易", 
-            "實盤交易",
-            "績效分析"
-        ])
-        
-        with tab1:
-            render_training_tab()
-        
-        with tab2:
-            render_backtest_tab()
-        
-        with tab3:
-            render_paper_trading_tab()
-        
-        with tab4:
-            render_live_trading_tab()
-        
-        with tab5:
-            render_analytics_tab()
+    # 顯示對比彈窗
+    if st.session_state.get('show_comparison', False):
+        show_strategy_comparison()
+    
+    # 根據選擇渲染不同界面
+    if "V1" in strategy_version:
+        render_v1_interface()
+    else:
+        render_v2_interface()
 
-def render_training_tab():
-    """模型訓練頁面"""
-    st.header("模型訓練")
+def show_strategy_comparison():
+    """顯示策略對比"""
+    with st.expander("🏆 V1 vs V2 策略對比", expanded=True):
+        comparison_df = pd.DataFrame({
+            '項目': [
+                '模型架構',
+                '時序學習',
+                '集成學習',
+                '信號過濾',
+                '風險管理',
+                '市場自適應',
+                '月交易量',
+                '月報酬目標',
+                '訓練時間',
+                'GPU需求'
+            ],
+            'V1 反轉策略': [
+                'XGBoost',
+                '✘',
+                '✘',
+                '單層',
+                '固定',
+                '✘',
+                '50-80筆',
+                '30-50%',
+                '5-10分鐘',
+                '不需要'
+            ],
+            'V2 高頻策略': [
+                'Transformer + LightGBM',
+                '✓ (100根K線)',
+                '✓ (加權集成)',
+                '三層過濾',
+                '動態調整',
+                '✓',
+                '140-150筆',
+                '50%+',
+                '10-20分鐘',
+                '建議使用'
+            ]
+        })
+        
+        st.table(comparison_df)
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.success("""
+            **選擇V1如果:**
+            - 初學者
+            - 無GPU設備
+            - 中低頻交易偏好
+            - 追求穩定
+            """)
+        
+        with col2:
+            st.info("""
+            **選擇V2如果:**
+            - 有深度學習經驗
+            - 有GPU設備
+            - 高頻自動化交易
+            - 追求高報酬
+            """)
+        
+        if st.button("關閉對比", use_container_width=True):
+            st.session_state['show_comparison'] = False
+            st.rerun()
+
+def render_v1_interface():
+    """V1策略界面"""
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "🎯 模型訓練",
+        "📈 回測分析",
+        "🎮 模擬交易", 
+        "💰 實盤交易",
+        "📊 績效分析"
+    ])
+    
+    with tab1:
+        render_v1_training()
+    
+    with tab2:
+        render_v1_backtest()
+    
+    with tab3:
+        render_paper_trading_tab()
+    
+    with tab4:
+        render_live_trading_tab()
+    
+    with tab5:
+        render_v1_analytics()
+
+def render_v2_interface():
+    """V2策略界面"""
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "🧠 V2模型訓練",
+        "📈 V2回測分析",
+        "🎮 V2模擬交易",
+        "⚙️ 系統狀態"
+    ])
+    
+    with tab1:
+        render_v2_training()
+    
+    with tab2:
+        render_v2_backtest()
+    
+    with tab3:
+        render_v2_paper_trading()
+    
+    with tab4:
+        render_v2_status()
+
+def render_v1_training():
+    """V1模型訓練頁面"""
+    st.header("🎯 V1 模型訓練")
     
     col1, col2 = st.columns([1, 2])
     
@@ -89,14 +221,14 @@ def render_training_tab():
         symbol = st.selectbox(
             "交易對",
             ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "AVAXUSDT"],
-            key="train_symbol"
+            key="v1_train_symbol"
         )
         
         timeframe = st.selectbox(
             "時間框架",
             ["15m", "1h", "4h"],
             index=0,
-            key="train_timeframe"
+            key="v1_train_timeframe"
         )
         
         st.markdown("---")
@@ -122,8 +254,8 @@ def render_training_tab():
         
         st.markdown("---")
         
-        if st.button("開始訓練", type="primary", use_container_width=True):
-            st.session_state['training_params'] = {
+        if st.button("開始V1訓練", type="primary", use_container_width=True):
+            st.session_state['v1_training_params'] = {
                 'symbol': symbol,
                 'timeframe': timeframe,
                 'lookback': lookback,
@@ -136,13 +268,13 @@ def render_training_tab():
                 'test_size': test_size,
                 'oos_size': oos_size
             }
-            st.session_state['training_started'] = True
+            st.session_state['v1_training_started'] = True
     
     with col2:
         st.subheader("訓練過程")
         
-        if st.session_state.get('training_started', False):
-            params = st.session_state['training_params']
+        if st.session_state.get('v1_training_started', False):
+            params = st.session_state['v1_training_params']
             
             try:
                 config = {
@@ -173,14 +305,14 @@ def render_training_tab():
                 with st.spinner('步驟 1/5: 加載歷史數據...'):
                     loader = HFDataLoader()
                     df = loader.load_klines(params['symbol'], params['timeframe'])
-                    st.success(f"加載完成: {len(df)} 筆數據")
+                    st.success(f"✓ 加載完成: {len(df)} 筆數據")
                 
                 with st.spinner('步驟 2/5: 檢測反轉信號...'):
                     signal_detector = SignalDetector(config['signal_detection'])
                     df = signal_detector.detect_signals(df)
                     long_signals = df['signal_long'].sum()
                     short_signals = df['signal_short'].sum()
-                    st.success(f"做多信號: {long_signals} | 做空信號: {short_signals}")
+                    st.success(f"✓ 做多信號: {long_signals} | 做空信號: {short_signals}")
                 
                 with st.spinner('步驟 3/5: 生成ML特徵...'):
                     feature_engineer = FeatureEngineer(config['feature_engineering'])
@@ -192,7 +324,7 @@ def render_training_tab():
                         stop_loss=config['label_generation']['stop_loss']
                     )
                     feature_cols = feature_engineer.get_feature_names()
-                    st.success(f"特徵數量: {len(feature_cols)}")
+                    st.success(f"✓ 特徵數量: {len(feature_cols)}")
                 
                 with st.spinner('步驟 4/5: 訓練機器學習模型...'):
                     ml_predictor = MLPredictor(config['ml_model'])
@@ -202,6 +334,7 @@ def render_training_tab():
                         test_size=params['test_size'],
                         oos_size=params['oos_size']
                     )
+                    st.success("✓ 模型訓練完成")
                 
                 with st.spinner('步驟 5/5: 保存模型...'):
                     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -213,6 +346,7 @@ def render_training_tab():
                         'symbol': params['symbol'],
                         'timeframe': params['timeframe'],
                         'training_date': timestamp,
+                        'model_version': 'v1',
                         'data_samples': len(df),
                         'long_signals': int(long_signals),
                         'short_signals': int(short_signals),
@@ -222,7 +356,7 @@ def render_training_tab():
                     with open(model_dir / 'model_config.json', 'w') as f:
                         json.dump(model_config, f, indent=2)
                     
-                    st.success(f"訓練完成: {model_name}")
+                    st.success(f"✅ V1訓練完成: {model_name}")
                 
                 col_a, col_b, col_c = st.columns(3)
                 with col_a:
@@ -240,18 +374,126 @@ def render_training_tab():
                 })
                 st.bar_chart(label_dist.set_index('類別'))
                 
-                st.session_state['latest_model'] = model_name
-                st.session_state['training_started'] = False
+                st.session_state['latest_v1_model'] = model_name
+                st.session_state['v1_training_started'] = False
                 
             except Exception as e:
-                st.error(f"訓練失敗: {str(e)}")
-                st.session_state['training_started'] = False
+                st.error(f"❌ 訓練失敗: {str(e)}")
+                import traceback
+                with st.expander("錯誤詳情"):
+                    st.code(traceback.format_exc())
+                st.session_state['v1_training_started'] = False
         else:
-            st.info("請配置參數後點擊開始訓練")
+            st.info("""
+            ### V1訓練流程
+            
+            1. **加載數據**: 從HuggingFace加載歷史K線
+            2. **信號檢測**: 訂單流不平衡 + 流動性掃蕩
+            3. **特徵工程**: 提取50+個技術指標
+            4. **標籤生成**: 前瞻窗口盈虧標籤
+            5. **模型訓練**: XGBoost機器學習
+            6. **模型驗證**: 訓練集/驗證集/OOS測試
+            
+            **預計時間**: 5-10分鐘
+            """)
 
-def render_backtest_tab():
-    """回測頁面"""
-    st.header("回測分析")
+def render_v2_training():
+    """V2模型訓練頁面"""
+    st.header("🧠 V2 Transformer模型訓練")
+    
+    col1, col2 = st.columns([1, 2])
+    
+    with col1:
+        st.subheader("訓練參數")
+        
+        symbol = st.selectbox(
+            "交易對",
+            ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT"],
+            key="v2_train_symbol"
+        )
+        
+        timeframe = st.selectbox(
+            "時間框架",
+            ["15m", "1h"],
+            index=0,
+            key="v2_train_timeframe"
+        )
+        
+        st.markdown("---")
+        
+        st.subheader("模型配置")
+        sequence_length = st.slider("序列長度", 50, 200, 100, 10,
+                                   help="Transformer輸入的K線數量")
+        
+        use_transformer = st.checkbox("Transformer模型", value=True)
+        use_lgb = st.checkbox("LightGBM模型", value=True)
+        
+        if use_transformer and use_lgb:
+            st.caption("✓ 集成模式: Transformer + LightGBM")
+        
+        st.markdown("---")
+        
+        if st.button("開始V2訓練", type="primary", use_container_width=True):
+            with st.spinner("訓練V2模型 (需時10-20分鐘)..."):
+                try:
+                    v2_train_script = project_root.parent / 'high_frequency_strategy_v2' / 'train_model.py'
+                    result = subprocess.run([
+                        sys.executable,
+                        str(v2_train_script),
+                        "--symbol", symbol,
+                        "--timeframe", timeframe,
+                        "--sequence_length", str(sequence_length)
+                    ], capture_output=True, text=True, timeout=1800)
+                    
+                    if result.returncode == 0:
+                        st.success("✅ V2訓練完成!")
+                        with st.expander("訓練詳細"):
+                            st.code(result.stdout)
+                    else:
+                        st.error("❌ V2訓練失敗")
+                        st.code(result.stderr)
+                except subprocess.TimeoutExpired:
+                    st.error("訓練超時 (>30分鐘)")
+                except Exception as e:
+                    st.error(f"執行失敗: {str(e)}")
+    
+    with col2:
+        st.subheader("💡 V2訓練流程")
+        st.markdown("""
+        ### Transformer深度學習訓練
+        
+        1. **加載數據**: HuggingFace歷史K線
+        2. **特徵提取**: 
+           - 50+技術指標
+           - 市場微觀結構
+           - 時間特徵 (時段/星期)
+           - 波動率狀態
+        3. **時序準備**: 創建100根K線序列
+        4. **模型訓練**:
+           - Transformer (4層, 8頭注意力)
+           - LightGBM (快速決策)
+           - 集成學習
+        5. **模型驗證**: 訓練/驗證/測試集
+        
+        **預計時間**: 10-20分鐘 (GPU加速)
+        
+        **系統要求**:
+        - PyTorch 2.0+
+        - 8GB+ RAM
+        - GPU可選(快10倍)
+        """)
+        
+        st.markdown("---")
+        st.subheader("🎯 V2性能目標")
+        metrics_df = pd.DataFrame({
+            '指標': ['月交易數', '月報酬率', '勝率', '最大回撤', 'Sharpe'],
+            '目標值': ['140-150', '50%+', '60%+', '<20%', '>2.0']
+        })
+        st.table(metrics_df)
+
+def render_v1_backtest():
+    """V1回測分析 - 保持原有完整功能"""
+    st.header("📈 V1 回測分析")
     
     col1, col2 = st.columns([1, 2])
     
@@ -260,17 +502,18 @@ def render_backtest_tab():
         
         models_dir = Path('models')
         if models_dir.exists():
-            available_models = [d.name for d in models_dir.iterdir() if d.is_dir()]
+            v1_models = [d.name for d in models_dir.iterdir() 
+                        if d.is_dir() and '_v1_' in d.name]
         else:
-            available_models = []
+            v1_models = []
         
-        if not available_models:
-            available_models = ["無可用模型"]
+        if not v1_models:
+            v1_models = ["無可用V1模型"]
         
         model_version = st.selectbox(
-            "選擇模型",
-            available_models,
-            key="backtest_model"
+            "選擇V1模型",
+            v1_models,
+            key="v1_backtest_model"
         )
         
         st.markdown("---")
@@ -294,25 +537,21 @@ def render_backtest_tab():
         st.markdown("---")
         
         st.subheader("交易參數")
-        
-        st.caption("降低信號強度和置信度可增加交易數量")
-        min_signal_strength = st.slider("最小信號強度", 1, 5, 1, help="設為1可增加交易數量")
-        min_confidence = st.slider("最小模型置信度", 0.5, 0.95, 0.55, 0.05, help="降低可增加交易數量")
+        min_signal_strength = st.slider("最小信號強度", 1, 5, 1)
+        min_confidence = st.slider("最小模型置信度", 0.5, 0.95, 0.55, 0.05)
         
         st.markdown("---")
         
         st.subheader("倉位管理")
-        position_size_pct = st.slider("兩位大小 (%當前資金)", 10, 100, 95, 5, help="使用當前資金的百分比,實現複利效果") / 100
+        position_size_pct = st.slider("倉位大小 (%當前資金)", 10, 100, 95, 5) / 100
         
         st.markdown("---")
         
         st.subheader("風險管理")
-        
         sltp_mode = st.radio(
             "止損止盈模式",
             ["固定百分比 (推薦)", "ATR倍數"],
-            index=0,
-            help="固定百分比通常有更好的風險報酬比"
+            index=0
         )
         
         if sltp_mode == "固定百分比 (推薦)":
@@ -321,8 +560,8 @@ def render_backtest_tab():
             atr_multiplier_sl = None
             atr_multiplier_tp = None
         else:
-            atr_multiplier_sl = st.slider("ATR止損倍數", 0.5, 3.0, 1.5, 0.1, help="止損 = 當前ATR * 此倍數")
-            atr_multiplier_tp = st.slider("ATR止盈倍數", 1.0, 5.0, 3.0, 0.5, help="止盈 = 當前ATR * 此倍數")
+            atr_multiplier_sl = st.slider("ATR止損倍數", 0.5, 3.0, 1.5, 0.1)
+            atr_multiplier_tp = st.slider("ATR止盈倍數", 1.0, 5.0, 3.0, 0.5)
             fixed_sl_pct = None
             fixed_tp_pct = None
         
@@ -334,8 +573,9 @@ def render_backtest_tab():
         
         st.markdown("---")
         
-        if st.button("運行回測", type="primary", use_container_width=True, disabled=(model_version=="無可用模型")):
-            st.session_state['backtest_params'] = {
+        if st.button("運行V1回測", type="primary", use_container_width=True, 
+                    disabled=(model_version=="無可用V1模型")):
+            st.session_state['v1_backtest_params'] = {
                 'model': model_version,
                 'data_source': 'binance' if 'Binance' in data_source else 'hf',
                 'days': backtest_days,
@@ -352,13 +592,13 @@ def render_backtest_tab():
                 'fixed_sl_pct': fixed_sl_pct,
                 'fixed_tp_pct': fixed_tp_pct
             }
-            st.session_state['backtest_started'] = True
+            st.session_state['v1_backtest_started'] = True
     
     with col2:
         st.subheader("回測結果")
         
-        if st.session_state.get('backtest_started', False):
-            params = st.session_state['backtest_params']
+        if st.session_state.get('v1_backtest_started', False):
+            params = st.session_state['v1_backtest_params']
             
             try:
                 with st.spinner('加載訓練模型...'):
@@ -447,7 +687,7 @@ def render_backtest_tab():
                     )
                 
                 if 'error' not in results:
-                    st.success("回測完成")
+                    st.success("✅ V1回測完成")
                     
                     col_a, col_b, col_c, col_d = st.columns(4)
                     with col_a:
@@ -513,50 +753,54 @@ def render_backtest_tab():
                         use_container_width=True
                     )
                     
-                    st.session_state['backtest_results'] = results
-                    st.session_state['backtest_started'] = False
+                    st.session_state['v1_backtest_results'] = results
+                    st.session_state['v1_backtest_started'] = False
                 else:
-                    st.error(f"回測失敗: {results['error']}")
-                    st.session_state['backtest_started'] = False
+                    st.error(f"❌ 回測失敗: {results['error']}")
+                    st.session_state['v1_backtest_started'] = False
                     
             except Exception as e:
-                st.error(f"回測失敗: {str(e)}")
+                st.error(f"❌ 回測失敗: {str(e)}")
                 import traceback
-                st.code(traceback.format_exc())
-                st.session_state['backtest_started'] = False
+                with st.expander("錯誤詳情"):
+                    st.code(traceback.format_exc())
+                st.session_state['v1_backtest_started'] = False
         else:
             st.info("請配置回測參數後點擊運行回測")
 
+def render_v2_backtest():
+    """V2回測分析"""
+    st.header("📈 V2 回測分析")
+    st.info("V2回測功能開發中,先完成模型訓練")
+    st.caption("預計功能: 高頻交易回測、三層信號過濾、動態風險管理")
+
 def render_paper_trading_tab():
     """模擬交易頁面"""
-    st.header("模擬交易")
+    st.header("🎮 模擬交易")
     st.info(
-        "模擬交易功能將使用Bybit Demo帳戶實現\n\n"
-        "**此功能將允許您:**\n"
-        "- 使用模擬資金測試策略\n"
-        "- 監控實時表現\n"
-        "- 在實盤交易前驗證模型"
+        "模擬交易功能開發中\n\n"
+        "**功能規劃:**\n"
+        "- 使用Demo帳戶\n"
+        "- 實時信號監控\n"
+        "- 自動下單執行"
     )
 
 def render_live_trading_tab():
     """實盤交易頁面"""
-    st.header("實盤交易")
+    st.header("💰 實盤交易")
     st.warning("在回測結果驗證通過前,實盤交易功能已禁用")
-    
-    st.markdown(
-        "**啟用實盤交易前:**\n"
-        "1. 完成回測並獲得滿意的結果\n"
-        "2. 使用模擬交易測試至少7天\n"
-        "3. 配置Binance API憑證\n"
-        "4. 設置風險管理參數"
-    )
 
-def render_analytics_tab():
-    """分析頁面"""
-    st.header("績效分析")
+def render_v2_paper_trading():
+    """V2模擬交易"""
+    st.header("🎮 V2 模擬交易")
+    st.info("V2模擬交易功能開發中")
+
+def render_v1_analytics():
+    """V1績效分析"""
+    st.header("📊 V1 績效分析")
     
-    if 'backtest_results' in st.session_state:
-        results = st.session_state['backtest_results']
+    if 'v1_backtest_results' in st.session_state:
+        results = st.session_state['v1_backtest_results']
         
         st.subheader("模型表現")
         
@@ -600,7 +844,74 @@ def render_analytics_tab():
                 fig.update_layout(title='做多 vs 做空總盈虧', yaxis_title='盈虧 (USDT)')
                 st.plotly_chart(fig, use_container_width=True)
     else:
-        st.info("請先運行回測以查看分析結果")
+        st.info("請先運行V1回測以查看分析結果")
+
+def render_v2_status():
+    """V2系統狀態"""
+    st.header("⚙️ V2 系統狀態")
+    
+    # 模型統計
+    col1, col2, col3 = st.columns(3)
+    
+    models_dir = Path('models')
+    v1_count = 0
+    v2_count = 0
+    
+    if models_dir.exists():
+        for d in models_dir.iterdir():
+            if d.is_dir():
+                if '_v1_' in d.name:
+                    v1_count += 1
+                elif '_v2_' in d.name:
+                    v2_count += 1
+    
+    with col1:
+        st.metric("V1模型數量", v1_count)
+    with col2:
+        st.metric("V2模型數量", v2_count)
+    with col3:
+        st.metric("總模型數", v1_count + v2_count)
+    
+    st.markdown("---")
+    
+    # 系統要求
+    st.subheader("💻 系統要求")
+    
+    requirements = {
+        'Python': '3.8+',
+        'NumPy': '1.24+',
+        'Pandas': '2.0+',
+        'XGBoost': '2.0+ (V1)',
+        'LightGBM': '4.0+ (V2)',
+        'PyTorch': '2.0+ (V2必需)',
+        'CUDA': '12.1+ (可選)',
+        'RAM': '8GB+',
+        'GPU': '4GB+ VRAM (V2建議)'
+    }
+    
+    req_df = pd.DataFrame(list(requirements.items()), columns=['組件', '版本/規格'])
+    st.table(req_df)
+    
+    st.markdown("---")
+    
+    # 快速開始
+    st.subheader("🚀 快速開始")
+    
+    with st.expander("📖 安裝指南"):
+        st.code("""
+# 1. 安裝V1依賴
+cd reversal_strategy_v1
+pip install -r requirements.txt
+
+# 2. 安裝V2依賴
+cd ../high_frequency_strategy_v2
+pip install -r requirements.txt
+
+# 3. 安裝TA-Lib
+# Windows: 下載.whl從 https://www.lfd.uci.edu/~gohlke/pythonlibs/#ta-lib
+# Linux: sudo apt-get install ta-lib
+# Mac: brew install ta-lib
+        """, language="bash")
 
 if __name__ == "__main__":
     main()
