@@ -134,28 +134,38 @@ def render_v3_training():
         symbol = st.selectbox("交易對", ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT"], key="v3_train_symbol")
         timeframe = st.selectbox("時間框架", ["15m", "1h"], index=0, key="v3_train_timeframe")
         
-        # 預設配置
-        use_balanced_config = st.checkbox("使用平衡標籤配置 (推薦)", value=True)
+        # 配置選擇
+        config_mode = st.radio(
+            "標籤配置",
+            ["自定義", "平衡版 (0.9x盈利)", "激進版 (0.7x盈利) [推薦]"],
+            index=2
+        )
         
-        if use_balanced_config:
-            st.info("已啟用平衡配置: ATR 0.9x盈利, 1.2x止損\n目標: 15-20%有效標籤")
-            # 固定參數
+        if config_mode == "自定義":
+            st.markdown("---")
+            st.markdown("**標籤生成參數**")
+            forward_window = st.slider("前瞻窗口", 5, 15, 8)
+            atr_profit_mult = st.slider("ATR盈利倍數", 0.5, 3.0, 0.7, 0.1)
+            atr_loss_mult = st.slider("ATR虧損倍數", 0.5, 2.0, 1.5, 0.1)
+            min_volume_ratio = st.slider("最小成交量比", 0.5, 2.0, 0.7, 0.1)
+            min_trend_strength = st.slider("最小趨勢強度", 0.1, 0.8, 0.15, 0.05)
+            max_atr_ratio = 0.08
+        elif "平衡" in config_mode:
+            st.info("平衡配置: ATR 0.9x盈利, 1.2x止損\n目標: 15-20%有效標籤")
             forward_window = 8
             atr_profit_mult = 0.9
             atr_loss_mult = 1.2
             min_volume_ratio = 0.8
             min_trend_strength = 0.2
-        else:
-            st.markdown("---")
-            st.markdown("**標籤生成參數**")
-            forward_window = st.slider("前瞻窗口", 5, 15, 8)
-            atr_profit_mult = st.slider("ATR盈利倍數", 0.5, 3.0, 0.9, 0.1)
-            atr_loss_mult = st.slider("ATR虧損倍數", 0.5, 2.0, 1.2, 0.1)
-            
-            st.markdown("---")
-            st.markdown("**質量過濾**")
-            min_volume_ratio = st.slider("最小成交量比", 0.5, 2.0, 0.8, 0.1)
-            min_trend_strength = st.slider("最小趨勢強度", 0.1, 0.8, 0.2, 0.05)
+            max_atr_ratio = 0.07
+        else:  # 激進版
+            st.success("激進配置: ATR 0.7x盈利, 1.5x止損\n目標: 20-25%有效標籤\n解決7%有效標籤問題")
+            forward_window = 8
+            atr_profit_mult = 0.7
+            atr_loss_mult = 1.5
+            min_volume_ratio = 0.7
+            min_trend_strength = 0.15
+            max_atr_ratio = 0.08
         
         st.markdown("---")
         if st.button("開始V3訓練", type="primary", use_container_width=True):
@@ -167,7 +177,8 @@ def render_v3_training():
                 'atr_loss_multiplier': atr_loss_mult,
                 'min_volume_ratio': min_volume_ratio,
                 'min_trend_strength': min_trend_strength,
-                'use_balanced_config': use_balanced_config
+                'max_atr_ratio': max_atr_ratio,
+                'config_mode': config_mode
             }
             st.session_state['v3_training_started'] = True
     
@@ -178,32 +189,35 @@ def render_v3_training():
             st.session_state['v3_training_started'] = False
         else:
             st.info("""
-            V3 訓練流程 (平衡配置):
+            V3 訓練流程 (激進配置):
             
             1. 加載HuggingFace K線數據
-            2. 生成ATR動態標籤 (0.9x盈利, 1.2x止損)
+            2. 生成ATR動態標籤 (0.7x盈利, 1.5x止損)
             3. 提取市場微觀結構特徵
             4. LightGBM訓練 (防過擬合參數)
             5. 模型評估
             
             **預期結果:**
-            - 有效標籤: 15-20%
-            - 驗證準確率: 0.55-0.65
+            - 有效標籤: 20-25%
+            - 驗證準確率: 0.50-0.60
             - Precision: 0.55-0.65
             - Recall: 0.55-0.65
+            - 信心度: >60%
             
             預計: 5-10分鐘
             """)
             
             # 顯示配置比較
             st.markdown("---")
-            st.markdown("**參數對比**")
+            st.markdown("**參數進化**")
             comparison = pd.DataFrame({
-                '項目': ['ATR盈利倍數', 'ATR止損倍數', '成交量比', '趨勢強度'],
-                '舊版': ['1.2', '1.0', '1.0', '0.3'],
-                '平衡版': ['0.9 (降)', '1.2 (增)', '0.8 (降)', '0.2 (降)']
+                '項目': ['ATR盈利倍數', 'ATR止損倍數', '成交量比', '趨勢強度', '有效標籤率'],
+                '原版 (7%標籤)': ['0.9', '1.2', '0.8', '0.2', '7%'],
+                '激進版': ['0.7 (降22%)', '1.5 (增25%)', '0.7 (降12%)', '0.15 (降25%)', '20-25%']
             })
             st.table(comparison)
+            
+            st.warning("激進配置說明: 大幅降低盈利要求到0.7倍,同時放寬止損到1.5倍。這會產生更多有效標籤(20-25%),讓模型真正學習交易模式,而非偽懶預測中立。")
 
 def train_v3_model_in_gui(params):
     try:
@@ -246,7 +260,7 @@ def train_v3_model_in_gui(params):
                 'atr_loss_multiplier': params['atr_loss_multiplier'],
                 'min_volume_ratio': params['min_volume_ratio'],
                 'min_trend_strength': params['min_trend_strength'],
-                'max_atr_ratio': 0.07  # 放寬到7%
+                'max_atr_ratio': params['max_atr_ratio']
             }
             label_generator = V3LabelGenerator(label_config)
             df = label_generator.generate_labels(df)
@@ -260,12 +274,12 @@ def train_v3_model_in_gui(params):
             st.info(f"[有效標籤] {long_count + short_count} ({valid_rate*100:.1f}%)")
             
             # 警告: 類別不平衡
-            if valid_rate < 0.10:
-                st.warning("[警告] 有效標籤<10%,建議進一步降低ATR盈利倍數到0.8")
-            elif valid_rate > 0.25:
-                st.warning("[警告] 有效標籤>25%,可能質量不足")
+            if valid_rate < 0.15:
+                st.error(f"[錯誤] 有效標籤{valid_rate*100:.1f}%<15%,建議使用激進配置")
+            elif valid_rate > 0.30:
+                st.warning("[警告] 有效標籤>30%,可能質量不足")
             else:
-                st.success(f"[合理] 有效標籤在10-25%範圍")
+                st.success(f"[優秀] 有效標籤在15-30%範圍")
         
         # 步驟 4: 準備數據
         with st.spinner('步驟 4/5: 準備訓練數據...'):
@@ -324,12 +338,11 @@ def train_v3_model_in_gui(params):
         st.info(f"[信心度] 做多平均: {results['avg_conf_long']:.1%} | 做空平均: {results['avg_conf_short']:.1%}")
         
         # 檢查模型狀態
-        if results['val_accuracy'] > 0.85:
-            st.warning("[警告] 準確率>85%,可能仍有類別不平衡")
+        if results['val_accuracy'] > 0.75:
+            st.warning("[警告] 準確率>75%,仍有類別不平衡")
         
         if results['val_precision'] < 0.50:
             st.error("[警告] Precision<50%,交易信號質量差")
-            st.warning("建議: 進一步降低ATR盈利倍數到0.8")
         elif results['val_precision'] >= 0.55 and results['val_recall'] >= 0.55:
             st.success("[優秀] Precision和Recall均>55%,模型平衡!")
         
@@ -352,6 +365,7 @@ def train_v3_model_in_gui(params):
                     'symbol': params['symbol'],
                     'timeframe': params['timeframe'],
                     'model_version': 'v3',
+                    'config_mode': params.get('config_mode', '自定義'),
                     'training_date': timestamp,
                     'data_samples': len(df),
                     'train_samples': len(X_train),
