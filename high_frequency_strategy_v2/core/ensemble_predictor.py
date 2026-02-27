@@ -24,6 +24,9 @@ class EnsemblePredictor:
             'lgb': 0.5
         })
         
+        # 信心度閾值 (可從外部調整)
+        self.confidence_threshold = config.get('confidence_threshold', 0.35)
+        
         self.transformer_model = None
         self.lgb_model = None
     
@@ -133,8 +136,7 @@ class EnsemblePredictor:
             lgb_conf = np.max(lgb_probs, axis=1)
             
             # 信心度過濾: 只有高信心度才交易
-            confidence_threshold = 0.5  # 50%信心度
-            lgb_pred = np.where(lgb_conf >= confidence_threshold, lgb_pred, 0)
+            lgb_pred = np.where(lgb_conf >= self.confidence_threshold, lgb_pred, 0)
             
             predictions.append(lgb_pred * self.weights['lgb'])
             confidences.append(lgb_conf * self.weights['lgb'])
