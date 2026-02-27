@@ -1,6 +1,6 @@
 """
-V3 Label Generator - ATR Dynamic Labels with Quality Filters
-ATR動態標籤生成器
+V3 Label Generator - Adjusted for ~150 trades/month
+ATR動態標籤生成器 - 調整為更多有效標籤
 """
 import pandas as pd
 import numpy as np
@@ -8,13 +8,18 @@ from typing import Dict, Tuple
 
 class LabelGenerator:
     """
-    生成高質量交易標籤
+    生成高質量交易標籤 - 調整為10-15%有效標籤
     
     核心改進:
     1. ATR動態調整利潤要求
     2. 成交量確認
     3. 趨勢強度過濾
     4. 交易成本考慮
+    
+    調整策略:
+    - 降低質量過濾閾值
+    - 放寬標籤條件
+    - 目標: 10-15%有效標籤 -> 約5%信號通過過濾器 -> 月150筆
     """
     
     def __init__(self, config: Dict):
@@ -24,14 +29,14 @@ class LabelGenerator:
         self.forward_window = config.get('forward_window', 8)
         self.cost_buffer = config.get('cost_buffer', 0.002)  # 0.2% 交易成本緩衝
         
-        # ATR動態調整
-        self.atr_profit_multiplier = config.get('atr_profit_multiplier', 1.5)
-        self.atr_loss_multiplier = config.get('atr_loss_multiplier', 0.8)
+        # ATR動態調整 - 降低要求
+        self.atr_profit_multiplier = config.get('atr_profit_multiplier', 1.2)  # 1.5 -> 1.2
+        self.atr_loss_multiplier = config.get('atr_loss_multiplier', 1.0)    # 0.8 -> 1.0
         
-        # 質量過濾閾值
-        self.min_volume_ratio = config.get('min_volume_ratio', 1.2)  # 成交量至少是平均的1.2倍
-        self.min_trend_strength = config.get('min_trend_strength', 0.5)  # 趨勢強度閾值
-        self.max_atr_ratio = config.get('max_atr_ratio', 0.05)  # ATR不超過價格5%
+        # 質量過濾閾值 - 放寬
+        self.min_volume_ratio = config.get('min_volume_ratio', 1.0)    # 1.2 -> 1.0
+        self.min_trend_strength = config.get('min_trend_strength', 0.3) # 0.5 -> 0.3
+        self.max_atr_ratio = config.get('max_atr_ratio', 0.06)         # 0.05 -> 0.06
     
     def generate_labels(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -119,7 +124,7 @@ class LabelGenerator:
     
     def _pass_quality_filter(self, df: pd.DataFrame, idx: int) -> bool:
         """
-        質量過濾器
+        質量過濾器 - 放寬條件
         
         確保只在高質量條件下生成標籤:
         1. 成交量充足
@@ -128,7 +133,7 @@ class LabelGenerator:
         """
         row = df.iloc[idx]
         
-        # 檢查1: 成交量
+        # 檢查1: 成交量 - 放寬到1.0x
         if pd.isna(row['volume_ma_20']) or row['volume_ma_20'] == 0:
             return False
         
@@ -136,14 +141,14 @@ class LabelGenerator:
         if volume_ratio < self.min_volume_ratio:
             return False
         
-        # 檢查2: 趨勢強度
+        # 檢查2: 趨勢強度 - 放寬到0.3
         if pd.isna(row['trend_strength']):
             return False
         
         if abs(row['trend_strength']) < self.min_trend_strength:
             return False
         
-        # 檢查3: ATR比例 (避免極端波動)
+        # 檢查3: ATR比例 - 放寬到6%
         if pd.isna(row['atr_ratio']):
             return False
         
@@ -175,17 +180,17 @@ class LabelGenerator:
         if first_reach_idx >= len(future_prices) - 1:
             return True  # 窗口末尾達到,認為有效
         
-        # 檢查達到後是否立即大幅回撤
+        # 放寪回撤檢查 - 允許回撤90%利潤
         next_prices = future_prices[first_reach_idx:first_reach_idx+2]
         if target_profit > 0:
-            # 做多: 檢查後續是否跌破95%利潤
+            # 做多: 檢查後續是否跌破90%利潤
             min_next = next_prices.min()
-            if min_next < entry_price + target_profit * 0.95:
+            if min_next < entry_price + target_profit * 0.90:  # 95% -> 90%
                 return False
         else:
-            # 做空: 檢查後續是否漲破95%利潤
+            # 做空: 檢查後續是否漲破90%利潤
             max_next = next_prices.max()
-            if max_next > entry_price + target_profit * 0.95:
+            if max_next > entry_price + target_profit * 0.90:
                 return False
         
         return True
@@ -198,21 +203,33 @@ class LabelGenerator:
         long_count = (df['label'] == 1).sum()
         short_count = (df['label'] == -1).sum()
         neutral_count = (df['label'] == 0).sum()
+        valid_count = long_count + short_count
         
-        print("\n[標籤生成統計]")
+        print("\n[標籤生成統計 - 調整為月150筆]")
         print(f"總樣本: {total}")
         print(f"做多標籤: {long_count} ({long_count/total*100:.1f}%)")
         print(f"做空標籤: {short_count} ({short_count/total*100:.1f}%)")
         print(f"中立標籤: {neutral_count} ({neutral_count/total*100:.1f}%)")
-        print(f"有效交易標籤: {long_count + short_count} ({(long_count + short_count)/total*100:.1f}%)")
+        print(f"有效交易標籤: {valid_count} ({valid_count/total*100:.1f}%)")
+        
+        # 預估月交易數 (15m: 2880根K線/月)
+        if total > 0:
+            monthly_raw_signals = (valid_count / total) * 2880
+            monthly_filtered = monthly_raw_signals * 0.5  # 假設過濾器通過率50%
+            print(f"\n[預估] 原始標籤 -> 月信號: {monthly_raw_signals:.0f} 筆")
+            print(f"[預估] 過濾後 -> 月交易: {monthly_filtered:.0f} 筆")
         
         # 警告: 標籤過少
-        if (long_count + short_count) / total < 0.05:
-            print("[警告] 有效標籤少於5%,可能需要調整參數")
+        if valid_count / total < 0.08:
+            print("[警告] 有效標籤少於8%,可能產生<100筆/月")
         
         # 警告: 標籤過多
-        if (long_count + short_count) / total > 0.30:
-            print("[警告] 有效標籤超過30%,質量可能不足")
+        if valid_count / total > 0.25:
+            print("[警告] 有效標籤超過25%,質量可能不足")
+        
+        # 合理範圍
+        if 0.10 <= valid_count / total <= 0.20:
+            print("[合理] 有效標籤萸10-20%,預估月100-200筆")
     
     def get_label_quality_metrics(self, df: pd.DataFrame) -> Dict:
         """
@@ -227,6 +244,7 @@ class LabelGenerator:
             'total_labels': len(labeled),
             'long_ratio': (df['label'] == 1).sum() / len(df),
             'short_ratio': (df['label'] == -1).sum() / len(df),
+            'valid_label_rate': len(labeled) / len(df),
             'avg_volume_ratio': labeled['volume'].mean() / df['volume'].mean(),
             'avg_trend_strength': labeled['trend_strength'].abs().mean(),
             'avg_atr_ratio': labeled['atr_ratio'].mean()
