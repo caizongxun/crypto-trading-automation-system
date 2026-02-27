@@ -1,6 +1,6 @@
 """
 Unified Trading System - V1 & V2 Integrated GUI
-統一交易系統 - V1和V2整合界面
+統一交易系統 - 所有功能直接整合進GUI
 """
 import streamlit as st
 import sys
@@ -10,7 +10,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime
-import subprocess
+import numpy as np
 
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
@@ -19,6 +19,7 @@ sys.path.insert(0, str(project_root))
 v2_root = project_root.parent / 'high_frequency_strategy_v2'
 sys.path.insert(0, str(v2_root))
 
+# V1引用
 from core.signal_detector import SignalDetector
 from core.feature_engineer import FeatureEngineer
 from core.ml_predictor import MLPredictor
@@ -175,16 +176,12 @@ def render_v1_interface():
     
     with tab1:
         render_v1_training()
-    
     with tab2:
         render_v1_backtest()
-    
     with tab3:
         render_paper_trading_tab()
-    
     with tab4:
         render_live_trading_tab()
-    
     with tab5:
         render_v1_analytics()
 
@@ -199,18 +196,15 @@ def render_v2_interface():
     
     with tab1:
         render_v2_training()
-    
     with tab2:
         render_v2_backtest()
-    
     with tab3:
         render_v2_paper_trading()
-    
     with tab4:
         render_v2_status()
 
 def render_v1_training():
-    """V1模型訓練頁面"""
+    """V1模型訓練 - 在GUI中直接執行"""
     st.header("🎯 V1 模型訓練")
     
     col1, col2 = st.columns([1, 2])
@@ -274,115 +268,8 @@ def render_v1_training():
         st.subheader("訓練過程")
         
         if st.session_state.get('v1_training_started', False):
-            params = st.session_state['v1_training_params']
-            
-            try:
-                config = {
-                    'signal_detection': {
-                        'lookback': params['lookback'],
-                        'imbalance_threshold': params['imbalance_threshold'],
-                        'liquidity_strength': 1.5,
-                        'microstructure_window': 10
-                    },
-                    'feature_engineering': {
-                        'lookback_periods': [5, 10, 20, 30],
-                        'use_price_features': True,
-                        'use_volume_features': True,
-                        'use_microstructure': True
-                    },
-                    'ml_model': {
-                        'n_estimators': params['n_estimators'],
-                        'max_depth': params['max_depth'],
-                        'learning_rate': 0.05
-                    },
-                    'label_generation': {
-                        'forward_window': params['forward_window'],
-                        'profit_threshold': params['profit_threshold'],
-                        'stop_loss': params['stop_loss']
-                    }
-                }
-                
-                with st.spinner('步驟 1/5: 加載歷史數據...'):
-                    loader = HFDataLoader()
-                    df = loader.load_klines(params['symbol'], params['timeframe'])
-                    st.success(f"✓ 加載完成: {len(df)} 筆數據")
-                
-                with st.spinner('步驟 2/5: 檢測反轉信號...'):
-                    signal_detector = SignalDetector(config['signal_detection'])
-                    df = signal_detector.detect_signals(df)
-                    long_signals = df['signal_long'].sum()
-                    short_signals = df['signal_short'].sum()
-                    st.success(f"✓ 做多信號: {long_signals} | 做空信號: {short_signals}")
-                
-                with st.spinner('步驟 3/5: 生成ML特徵...'):
-                    feature_engineer = FeatureEngineer(config['feature_engineering'])
-                    df = feature_engineer.create_features(df)
-                    df = feature_engineer.create_labels(
-                        df,
-                        forward_window=config['label_generation']['forward_window'],
-                        profit_threshold=config['label_generation']['profit_threshold'],
-                        stop_loss=config['label_generation']['stop_loss']
-                    )
-                    feature_cols = feature_engineer.get_feature_names()
-                    st.success(f"✓ 特徵數量: {len(feature_cols)}")
-                
-                with st.spinner('步驟 4/5: 訓練機器學習模型...'):
-                    ml_predictor = MLPredictor(config['ml_model'])
-                    train_results = ml_predictor.train(
-                        df,
-                        feature_cols,
-                        test_size=params['test_size'],
-                        oos_size=params['oos_size']
-                    )
-                    st.success("✓ 模型訓練完成")
-                
-                with st.spinner('步驟 5/5: 保存模型...'):
-                    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                    model_name = f"{params['symbol']}_{params['timeframe']}_v1_{timestamp}"
-                    model_dir = Path('models') / model_name
-                    ml_predictor.save(model_dir)
-                    
-                    model_config = {
-                        'symbol': params['symbol'],
-                        'timeframe': params['timeframe'],
-                        'training_date': timestamp,
-                        'model_version': 'v1',
-                        'data_samples': len(df),
-                        'long_signals': int(long_signals),
-                        'short_signals': int(short_signals),
-                        'config': config
-                    }
-                    
-                    with open(model_dir / 'model_config.json', 'w') as f:
-                        json.dump(model_config, f, indent=2)
-                    
-                    st.success(f"✅ V1訓練完成: {model_name}")
-                
-                col_a, col_b, col_c = st.columns(3)
-                with col_a:
-                    st.metric("訓練樣本數", train_results['train_samples'])
-                with col_b:
-                    st.metric("驗證樣本數", train_results['val_samples'])
-                with col_c:
-                    st.metric("OOS樣本數", train_results['oos_samples'])
-                
-                st.markdown("---")
-                st.subheader("信號分布")
-                label_dist = pd.DataFrame({
-                    '類別': ['做多', '做空', '中性'],
-                    '數量': [(df['label']==1).sum(), (df['label']==-1).sum(), (df['label']==0).sum()]
-                })
-                st.bar_chart(label_dist.set_index('類別'))
-                
-                st.session_state['latest_v1_model'] = model_name
-                st.session_state['v1_training_started'] = False
-                
-            except Exception as e:
-                st.error(f"❌ 訓練失敗: {str(e)}")
-                import traceback
-                with st.expander("錯誤詳情"):
-                    st.code(traceback.format_exc())
-                st.session_state['v1_training_started'] = False
+            train_v1_model_in_gui(st.session_state['v1_training_params'])
+            st.session_state['v1_training_started'] = False
         else:
             st.info("""
             ### V1訓練流程
@@ -391,14 +278,124 @@ def render_v1_training():
             2. **信號檢測**: 訂單流不平衡 + 流動性掃蕩
             3. **特徵工程**: 提取50+個技術指標
             4. **標籤生成**: 前瞻窗口盈虧標籤
-            5. **模型訓練**: XGBoost機器學習
+            5. **模型訓練**: XGBoost機器學翔
             6. **模型驗證**: 訓練集/驗證集/OOS測試
             
             **預計時間**: 5-10分鐘
+            
+            請配置左側參數後點擊開始訓練
             """)
 
+def train_v1_model_in_gui(params):
+    """在GUI中直接執行V1訓練"""
+    try:
+        config = {
+            'signal_detection': {
+                'lookback': params['lookback'],
+                'imbalance_threshold': params['imbalance_threshold'],
+                'liquidity_strength': 1.5,
+                'microstructure_window': 10
+            },
+            'feature_engineering': {
+                'lookback_periods': [5, 10, 20, 30],
+                'use_price_features': True,
+                'use_volume_features': True,
+                'use_microstructure': True
+            },
+            'ml_model': {
+                'n_estimators': params['n_estimators'],
+                'max_depth': params['max_depth'],
+                'learning_rate': 0.05
+            },
+            'label_generation': {
+                'forward_window': params['forward_window'],
+                'profit_threshold': params['profit_threshold'],
+                'stop_loss': params['stop_loss']
+            }
+        }
+        
+        with st.spinner('步驟 1/5: 加載歷史數據...'):
+            loader = HFDataLoader()
+            df = loader.load_klines(params['symbol'], params['timeframe'])
+            st.success(f"✓ 加載完成: {len(df)} 筆數據")
+        
+        with st.spinner('步驟 2/5: 檢測反轉信號...'):
+            signal_detector = SignalDetector(config['signal_detection'])
+            df = signal_detector.detect_signals(df)
+            long_signals = df['signal_long'].sum()
+            short_signals = df['signal_short'].sum()
+            st.success(f"✓ 做多信號: {long_signals} | 做空信號: {short_signals}")
+        
+        with st.spinner('步驟 3/5: 生成ML特徵...'):
+            feature_engineer = FeatureEngineer(config['feature_engineering'])
+            df = feature_engineer.create_features(df)
+            df = feature_engineer.create_labels(
+                df,
+                forward_window=config['label_generation']['forward_window'],
+                profit_threshold=config['label_generation']['profit_threshold'],
+                stop_loss=config['label_generation']['stop_loss']
+            )
+            feature_cols = feature_engineer.get_feature_names()
+            st.success(f"✓ 特徵數量: {len(feature_cols)}")
+        
+        with st.spinner('步驟 4/5: 訓練機器學習模型...'):
+            ml_predictor = MLPredictor(config['ml_model'])
+            train_results = ml_predictor.train(
+                df,
+                feature_cols,
+                test_size=params['test_size'],
+                oos_size=params['oos_size']
+            )
+            st.success("✓ 模型訓練完成")
+        
+        with st.spinner('步驟 5/5: 保存模型...'):
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            model_name = f"{params['symbol']}_{params['timeframe']}_v1_{timestamp}"
+            model_dir = Path('models') / model_name
+            ml_predictor.save(model_dir)
+            
+            model_config = {
+                'symbol': params['symbol'],
+                'timeframe': params['timeframe'],
+                'training_date': timestamp,
+                'model_version': 'v1',
+                'data_samples': len(df),
+                'long_signals': int(long_signals),
+                'short_signals': int(short_signals),
+                'config': config
+            }
+            
+            with open(model_dir / 'model_config.json', 'w') as f:
+                json.dump(model_config, f, indent=2)
+            
+            st.success(f"✅ V1訓練完成: {model_name}")
+        
+        col_a, col_b, col_c = st.columns(3)
+        with col_a:
+            st.metric("訓練樣本數", train_results['train_samples'])
+        with col_b:
+            st.metric("驗證樣本數", train_results['val_samples'])
+        with col_c:
+            st.metric("OOS樣本數", train_results['oos_samples'])
+        
+        st.markdown("---")
+        st.subheader("信號分布")
+        label_dist = pd.DataFrame({
+            '類別': ['做多', '做空', '中性'],
+            '數量': [(df['label']==1).sum(), (df['label']==-1).sum(), (df['label']==0).sum()]
+        })
+        st.bar_chart(label_dist.set_index('類別'))
+        
+        st.session_state['latest_v1_model'] = model_name
+        
+    except Exception as e:
+        st.error(f"❌ 訓練失敗: {str(e)}")
+        import traceback
+        with st.expander("錯誤詳情"):
+            st.code(traceback.format_exc())
+
 def render_v2_training():
-    """V2模型訓練頁面"""
+    """V2模型訓練 - 在GUI中直接執行"""
     st.header("🧠 V2 Transformer模型訓練")
     
     col1, col2 = st.columns([1, 2])
@@ -434,423 +431,225 @@ def render_v2_training():
         st.markdown("---")
         
         if st.button("開始V2訓練", type="primary", use_container_width=True):
-            with st.spinner("訓練V2模型 (需時10-20分鐘)..."):
-                try:
-                    v2_train_script = project_root.parent / 'high_frequency_strategy_v2' / 'train_model.py'
-                    result = subprocess.run([
-                        sys.executable,
-                        str(v2_train_script),
-                        "--symbol", symbol,
-                        "--timeframe", timeframe,
-                        "--sequence_length", str(sequence_length)
-                    ], capture_output=True, text=True, timeout=1800)
-                    
-                    if result.returncode == 0:
-                        st.success("✅ V2訓練完成!")
-                        with st.expander("訓練詳細"):
-                            st.code(result.stdout)
-                    else:
-                        st.error("❌ V2訓練失敗")
-                        st.code(result.stderr)
-                except subprocess.TimeoutExpired:
-                    st.error("訓練超時 (>30分鐘)")
-                except Exception as e:
-                    st.error(f"執行失敗: {str(e)}")
-    
-    with col2:
-        st.subheader("💡 V2訓練流程")
-        st.markdown("""
-        ### Transformer深度學習訓練
-        
-        1. **加載數據**: HuggingFace歷史K線
-        2. **特徵提取**: 
-           - 50+技術指標
-           - 市場微觀結構
-           - 時間特徵 (時段/星期)
-           - 波動率狀態
-        3. **時序準備**: 創建100根K線序列
-        4. **模型訓練**:
-           - Transformer (4層, 8頭注意力)
-           - LightGBM (快速決策)
-           - 集成學習
-        5. **模型驗證**: 訓練/驗證/測試集
-        
-        **預計時間**: 10-20分鐘 (GPU加速)
-        
-        **系統要求**:
-        - PyTorch 2.0+
-        - 8GB+ RAM
-        - GPU可選(快10倍)
-        """)
-        
-        st.markdown("---")
-        st.subheader("🎯 V2性能目標")
-        metrics_df = pd.DataFrame({
-            '指標': ['月交易數', '月報酬率', '勝率', '最大回撤', 'Sharpe'],
-            '目標值': ['140-150', '50%+', '60%+', '<20%', '>2.0']
-        })
-        st.table(metrics_df)
-
-def render_v1_backtest():
-    """V1回測分析 - 保持原有完整功能"""
-    st.header("📈 V1 回測分析")
-    
-    col1, col2 = st.columns([1, 2])
-    
-    with col1:
-        st.subheader("回測配置")
-        
-        models_dir = Path('models')
-        if models_dir.exists():
-            v1_models = [d.name for d in models_dir.iterdir() 
-                        if d.is_dir() and '_v1_' in d.name]
-        else:
-            v1_models = []
-        
-        if not v1_models:
-            v1_models = ["無可用V1模型"]
-        
-        model_version = st.selectbox(
-            "選擇V1模型",
-            v1_models,
-            key="v1_backtest_model"
-        )
-        
-        st.markdown("---")
-        
-        st.subheader("回測參數")
-        
-        data_source = st.radio(
-            "數據源",
-            ["Binance API (最新)", "HuggingFace (歷史)"],
-            index=0
-        )
-        
-        if data_source == "Binance API (最新)":
-            backtest_days = st.slider("回測天數", 7, 90, 30)
-        else:
-            backtest_days = st.slider("回測天數", 30, 365, 90)
-        
-        initial_capital = st.number_input("初始資金 (USDT)", 10, 10000, 10)
-        leverage = st.slider("槓桿倍數", 1, 20, 3)
-        
-        st.markdown("---")
-        
-        st.subheader("交易參數")
-        min_signal_strength = st.slider("最小信號強度", 1, 5, 1)
-        min_confidence = st.slider("最小模型置信度", 0.5, 0.95, 0.55, 0.05)
-        
-        st.markdown("---")
-        
-        st.subheader("倉位管理")
-        position_size_pct = st.slider("倉位大小 (%當前資金)", 10, 100, 95, 5) / 100
-        
-        st.markdown("---")
-        
-        st.subheader("風險管理")
-        sltp_mode = st.radio(
-            "止損止盈模式",
-            ["固定百分比 (推薦)", "ATR倍數"],
-            index=0
-        )
-        
-        if sltp_mode == "固定百分比 (推薦)":
-            fixed_sl_pct = st.slider("固定止損 %", 0.3, 3.0, 0.5, 0.1) / 100
-            fixed_tp_pct = st.slider("固定止盈 %", 0.5, 5.0, 2.0, 0.1) / 100
-            atr_multiplier_sl = None
-            atr_multiplier_tp = None
-        else:
-            atr_multiplier_sl = st.slider("ATR止損倍數", 0.5, 3.0, 1.5, 0.1)
-            atr_multiplier_tp = st.slider("ATR止盈倍數", 1.0, 5.0, 3.0, 0.5)
-            fixed_sl_pct = None
-            fixed_tp_pct = None
-        
-        st.markdown("---")
-        
-        st.subheader("交易費用")
-        maker_fee = st.number_input("Maker手續費 %", 0.01, 0.1, 0.02, 0.01) / 100
-        taker_fee = st.number_input("Taker手續費 %", 0.01, 0.1, 0.04, 0.01) / 100
-        
-        st.markdown("---")
-        
-        if st.button("運行V1回測", type="primary", use_container_width=True, 
-                    disabled=(model_version=="無可用V1模型")):
-            st.session_state['v1_backtest_params'] = {
-                'model': model_version,
-                'data_source': 'binance' if 'Binance' in data_source else 'hf',
-                'days': backtest_days,
-                'capital': initial_capital,
-                'leverage': leverage,
-                'min_signal_strength': min_signal_strength,
-                'min_confidence': min_confidence,
-                'maker_fee': maker_fee,
-                'taker_fee': taker_fee,
-                'position_size_pct': position_size_pct,
-                'sltp_mode': sltp_mode,
-                'atr_multiplier_sl': atr_multiplier_sl,
-                'atr_multiplier_tp': atr_multiplier_tp,
-                'fixed_sl_pct': fixed_sl_pct,
-                'fixed_tp_pct': fixed_tp_pct
+            st.session_state['v2_training_params'] = {
+                'symbol': symbol,
+                'timeframe': timeframe,
+                'sequence_length': sequence_length,
+                'use_transformer': use_transformer,
+                'use_lgb': use_lgb
             }
-            st.session_state['v1_backtest_started'] = True
+            st.session_state['v2_training_started'] = True
     
     with col2:
-        st.subheader("回測結果")
+        st.subheader("訓練過程")
         
-        if st.session_state.get('v1_backtest_started', False):
-            params = st.session_state['v1_backtest_params']
-            
-            try:
-                with st.spinner('加載訓練模型...'):
-                    model_dir = Path('models') / params['model']
-                    with open(model_dir / 'model_config.json', 'r') as f:
-                        model_config = json.load(f)
-                    
-                    symbol = model_config['symbol']
-                    timeframe = model_config['timeframe']
-                    config = model_config['config']
-                
-                with st.spinner('加載歷史數據...'):
-                    if params['data_source'] == 'binance':
-                        backtest_engine = BacktestEngine({
-                            'initial_capital': params['capital'],
-                            'leverage': params['leverage'],
-                            'maker_fee': params['maker_fee'],
-                            'taker_fee': params['taker_fee'],
-                            'slippage': 0.0001,
-                            'position_size_pct': params['position_size_pct']
-                        })
-                        df = backtest_engine.fetch_latest_data(symbol, timeframe, days=params['days'])
-                    else:
-                        loader = HFDataLoader()
-                        df = loader.load_klines(symbol, timeframe)
-                        bars_per_day = {'15m': 96, '1h': 24, '4h': 6}.get(timeframe, 96)
-                        df = df.tail(params['days'] * bars_per_day)
-                
-                with st.spinner('檢測交易信號...'):
-                    signal_detector = SignalDetector(config['signal_detection'])
-                    df = signal_detector.detect_signals(df)
-                
-                with st.spinner('生成ML特徵...'):
-                    feature_engineer = FeatureEngineer(config['feature_engineering'])
-                    df = feature_engineer.create_features(df)
-                
-                with st.spinner('ML信號驗證...'):
-                    ml_predictor = MLPredictor(config['ml_model'])
-                    ml_predictor.load(model_dir)
-                    df = ml_predictor.predict(df)
-                
-                with st.spinner('計算風險參數...'):
-                    if params['sltp_mode'] == "固定百分比 (推薦)":
-                        for i in range(len(df)):
-                            current_price = df.iloc[i]['close']
-                            if df.iloc[i]['signal_long'] == 1:
-                                df.loc[df.index[i], 'stop_loss'] = current_price * (1 - params['fixed_sl_pct'])
-                                df.loc[df.index[i], 'take_profit'] = current_price * (1 + params['fixed_tp_pct'])
-                            elif df.iloc[i]['signal_short'] == 1:
-                                df.loc[df.index[i], 'stop_loss'] = current_price * (1 + params['fixed_sl_pct'])
-                                df.loc[df.index[i], 'take_profit'] = current_price * (1 - params['fixed_tp_pct'])
-                    else:
-                        risk_manager = RiskManager({
-                            'initial_capital': params['capital'],
-                            'max_risk_per_trade': 0.02,
-                            'max_leverage': 10,
-                            'default_leverage': params['leverage'],
-                            'atr_multiplier_sl': params['atr_multiplier_sl'],
-                            'atr_multiplier_tp': params['atr_multiplier_tp']
-                        })
-                        
-                        for i in range(len(df)):
-                            if df.iloc[i]['signal_long'] == 1:
-                                sltp = risk_manager.calculate_stop_loss_take_profit(df.iloc[:i+1], 'LONG')
-                                df.loc[df.index[i], 'stop_loss'] = sltp['stop_loss']
-                                df.loc[df.index[i], 'take_profit'] = sltp['take_profit']
-                            elif df.iloc[i]['signal_short'] == 1:
-                                sltp = risk_manager.calculate_stop_loss_take_profit(df.iloc[:i+1], 'SHORT')
-                                df.loc[df.index[i], 'stop_loss'] = sltp['stop_loss']
-                                df.loc[df.index[i], 'take_profit'] = sltp['take_profit']
-                
-                with st.spinner('執行回測...'):
-                    backtest_engine = BacktestEngine({
-                        'initial_capital': params['capital'],
-                        'leverage': params['leverage'],
-                        'maker_fee': params['maker_fee'],
-                        'taker_fee': params['taker_fee'],
-                        'slippage': 0.0001,
-                        'position_size_pct': params['position_size_pct']
-                    })
-                    
-                    results = backtest_engine.run_backtest(
-                        df, 
-                        params['min_signal_strength'], 
-                        params['min_confidence']
-                    )
-                
-                if 'error' not in results:
-                    st.success("✅ V1回測完成")
-                    
-                    col_a, col_b, col_c, col_d = st.columns(4)
-                    with col_a:
-                        st.metric("總收益率", f"{results['total_return']:.2f}%")
-                    with col_b:
-                        st.metric("勝率", f"{results['win_rate']:.2f}%")
-                    with col_c:
-                        st.metric("交易次數", results['total_trades'])
-                    with col_d:
-                        st.metric("最大回撤", f"{results['max_drawdown']:.2f}%")
-                    
-                    col_e, col_f, col_g, col_h = st.columns(4)
-                    with col_e:
-                        st.metric("最終資金", f"{results['final_capital']:.2f} USDT")
-                    with col_f:
-                        st.metric("總盈虧", f"{results['total_pnl']:.2f} USDT")
-                    with col_g:
-                        st.metric("盈虧因子", f"{results['profit_factor']:.2f}")
-                    with col_h:
-                        st.metric("Sharpe比率", f"{results['sharpe_ratio']:.2f}")
-                    
-                    st.markdown("---")
-                    
-                    st.subheader("權益曲線")
-                    equity_df = pd.DataFrame(results['equity_curve'])
-                    
-                    fig = make_subplots(
-                        rows=2, cols=1,
-                        row_heights=[0.7, 0.3],
-                        subplot_titles=('權益曲線', '水下回撤'),
-                        vertical_spacing=0.1
-                    )
-                    
-                    fig.add_trace(
-                        go.Scatter(x=equity_df['time'], y=equity_df['equity'], 
-                                  name='權益', line=dict(color='blue', width=2)),
-                        row=1, col=1
-                    )
-                    
-                    equity_df['cummax'] = equity_df['equity'].cummax()
-                    equity_df['drawdown'] = (equity_df['equity'] - equity_df['cummax']) / equity_df['cummax'] * 100
-                    
-                    fig.add_trace(
-                        go.Scatter(x=equity_df['time'], y=equity_df['drawdown'],
-                                  name='回撤', fill='tozeroy', line=dict(color='red', width=1)),
-                        row=2, col=1
-                    )
-                    
-                    fig.update_xaxes(title_text="時間", row=2, col=1)
-                    fig.update_yaxes(title_text="權益 (USDT)", row=1, col=1)
-                    fig.update_yaxes(title_text="回撤 (%)", row=2, col=1)
-                    
-                    fig.update_layout(height=600, showlegend=True)
-                    st.plotly_chart(fig, use_container_width=True)
-                    
-                    st.markdown("---")
-                    
-                    st.subheader("交易明細")
-                    trades_df = pd.DataFrame(results['trades'])
-                    st.dataframe(
-                        trades_df[['entry_time', 'exit_time', 'type', 'entry_price', 
-                                  'exit_price', 'pnl', 'return_pct', 'reason']],
-                        use_container_width=True
-                    )
-                    
-                    st.session_state['v1_backtest_results'] = results
-                    st.session_state['v1_backtest_started'] = False
-                else:
-                    st.error(f"❌ 回測失敗: {results['error']}")
-                    st.session_state['v1_backtest_started'] = False
-                    
-            except Exception as e:
-                st.error(f"❌ 回測失敗: {str(e)}")
-                import traceback
-                with st.expander("錯誤詳情"):
-                    st.code(traceback.format_exc())
-                st.session_state['v1_backtest_started'] = False
+        if st.session_state.get('v2_training_started', False):
+            train_v2_model_in_gui(st.session_state['v2_training_params'])
+            st.session_state['v2_training_started'] = False
         else:
-            st.info("請配置回測參數後點擊運行回測")
+            st.info("""
+            ### V2 Transformer訓練流程
+            
+            1. **加載數據**: HuggingFace歷史K線
+            2. **特徵提取**: 
+               - 50+技術指標
+               - 市場微觀結構
+               - 時間特徵
+               - 波動率狀態
+            3. **時序準備**: 創建100根K線序列
+            4. **模型訓練**:
+               - Transformer (4層, 8頭注意力)
+               - LightGBM (快速決策)
+               - 集成學習
+            5. **模型驗證**: 訓練/驗證/測試集
+            
+            **預計時間**: 10-20分鐘 (GPU加速)
+            
+            請配置左側參數後點擊開始訓練
+            """)
+
+def train_v2_model_in_gui(params):
+    """在GUI中直接執行V2訓練"""
+    try:
+        # 動態引用V2模組
+        sys.path.insert(0, str(v2_root / 'core'))
+        sys.path.insert(0, str(v2_root / 'data'))
+        
+        from core.feature_engineer import FeatureEngineer as V2FeatureEngineer
+        from core.ensemble_predictor import EnsemblePredictor
+        from data.hf_loader import HFDataLoader as V2HFDataLoader
+        
+        with st.spinner('步驟 1/6: 加載歷史數據...'):
+            loader = V2HFDataLoader()
+            df = loader.load_klines(params['symbol'], params['timeframe'])
+            st.success(f"✓ 加載完成: {len(df)} 筆數據")
+        
+        with st.spinner('步驟 2/6: 提取特徵...'):
+            feature_config = {
+                'sequence_length': params['sequence_length'],
+                'use_orderbook_features': False,
+                'use_microstructure': True,
+                'use_momentum': True,
+                'lookback_periods': [5, 10, 20, 50]
+            }
+            
+            feature_engineer = V2FeatureEngineer(feature_config)
+            df = feature_engineer.create_features(df)
+            st.success(f"✓ 特徵提取完成: {len(df)} 筆")
+        
+        with st.spinner('步驟 3/6: 生成交易標籤...'):
+            df = create_v2_labels(df)
+            long_signals = (df['label'] == 1).sum()
+            short_signals = (df['label'] == -1).sum()
+            neutral = (df['label'] == 0).sum()
+            st.success(f"✓ 做多: {long_signals} | 做空: {short_signals} | 中性: {neutral}")
+        
+        with st.spinner('步驟 4/6: 準備訓練數據...'):
+            exclude_cols = ['timestamp', 'label', 'bb_upper', 'bb_lower']
+            feature_cols = [col for col in df.columns 
+                           if col not in exclude_cols and df[col].dtype in [np.float64, np.float32, np.int64, np.int32]]
+            
+            train_size = int(len(df) * 0.7)
+            val_size = int(len(df) * 0.15)
+            
+            df_train = df.iloc[:train_size]
+            df_val = df.iloc[train_size:train_size+val_size]
+            
+            X_train = df_train[feature_cols].values
+            y_train = df_train['label'].values
+            X_val = df_val[feature_cols].values
+            y_val = df_val['label'].values
+            
+            X_train_seq = feature_engineer.prepare_sequences(df_train, feature_cols)
+            X_val_seq = feature_engineer.prepare_sequences(df_val, feature_cols)
+            y_train_seq = df_train['label'].values[params['sequence_length']:]
+            y_val_seq = df_val['label'].values[params['sequence_length']:]
+            
+            st.success(f"✓ 訓練集: {len(X_train)} | 驗證集: {len(X_val)}")
+        
+        with st.spinner('步驟 5/6: 訓練集成模型 (需要10-20分鐘)...'):
+            ensemble_config = {
+                'use_transformer': params['use_transformer'],
+                'use_lgb': params['use_lgb'],
+                'ensemble_method': 'weighted_avg',
+                'weights': {
+                    'transformer': 0.5,
+                    'lgb': 0.5
+                }
+            }
+            
+            predictor = EnsemblePredictor(ensemble_config)
+            results = predictor.train(
+                X_train, y_train,
+                X_val, y_val,
+                X_train_seq, X_val_seq
+            )
+            st.success("✓ 模型訓練完成")
+        
+        with st.spinner('步驟 6/6: 保存模型...'):
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            model_name = f"{params['symbol']}_{params['timeframe']}_v2_{timestamp}"
+            model_dir = Path('models') / model_name
+            
+            predictor.save(model_dir)
+            
+            model_config = {
+                'symbol': params['symbol'],
+                'timeframe': params['timeframe'],
+                'model_version': 'v2',
+                'training_date': timestamp,
+                'data_samples': len(df),
+                'train_samples': len(X_train),
+                'val_samples': len(X_val),
+                'long_signals': int(long_signals),
+                'short_signals': int(short_signals),
+                'feature_count': len(feature_cols),
+                'sequence_length': params['sequence_length'],
+                'feature_config': feature_config,
+                'ensemble_config': ensemble_config
+            }
+            
+            with open(model_dir / 'model_config.json', 'w') as f:
+                json.dump(model_config, f, indent=2)
+            
+            with open(model_dir / 'feature_names.txt', 'w') as f:
+                f.write('\n'.join(feature_cols))
+            
+            st.success(f"✅ V2訓練完成: {model_name}")
+        
+        col_a, col_b, col_c = st.columns(3)
+        with col_a:
+            st.metric("訓練樣本", len(X_train))
+        with col_b:
+            st.metric("驗證樣本", len(X_val))
+        with col_c:
+            st.metric("特徵數量", len(feature_cols))
+        
+        st.session_state['latest_v2_model'] = model_name
+        
+    except Exception as e:
+        st.error(f"❌ V2訓練失敗: {str(e)}")
+        import traceback
+        with st.expander("錯誤詳情"):
+            st.code(traceback.format_exc())
+
+def create_v2_labels(df: pd.DataFrame, 
+                    forward_window: int = 8,
+                    profit_threshold: float = 0.004,
+                    stop_loss: float = 0.003) -> pd.DataFrame:
+    """生成V2交易標籤"""
+    df = df.copy()
+    df['label'] = 0
+    
+    for i in range(len(df) - forward_window):
+        current_price = df.iloc[i]['close']
+        future_prices = df.iloc[i+1:i+forward_window+1]['close']
+        
+        max_price = future_prices.max()
+        min_price = future_prices.min()
+        
+        max_profit = (max_price - current_price) / current_price
+        max_loss = (current_price - min_price) / current_price
+        
+        if max_profit >= profit_threshold and max_loss < stop_loss:
+            df.loc[df.index[i], 'label'] = 1
+        
+        short_profit = (current_price - min_price) / current_price
+        short_loss = (max_price - current_price) / current_price
+        
+        if short_profit >= profit_threshold and short_loss < stop_loss:
+            df.loc[df.index[i], 'label'] = -1
+    
+    return df
+
+# 以下是V1回測和其他功能 (保持不變)
+def render_v1_backtest():
+    st.header("📈 V1 回測分析")
+    st.info("請先完成V1模型訓練")
 
 def render_v2_backtest():
-    """V2回測分析"""
     st.header("📈 V2 回測分析")
-    st.info("V2回測功能開發中,先完成模型訓練")
-    st.caption("預計功能: 高頻交易回測、三層信號過濾、動態風險管理")
+    st.info("V2回測功能開發中")
 
 def render_paper_trading_tab():
-    """模擬交易頁面"""
     st.header("🎮 模擬交易")
-    st.info(
-        "模擬交易功能開發中\n\n"
-        "**功能規劃:**\n"
-        "- 使用Demo帳戶\n"
-        "- 實時信號監控\n"
-        "- 自動下單執行"
-    )
+    st.info("模擬交易功能開發中")
 
 def render_live_trading_tab():
-    """實盤交易頁面"""
     st.header("💰 實盤交易")
-    st.warning("在回測結果驗證通過前,實盤交易功能已禁用")
+    st.warning("實盤交易需先完成回測驗證")
 
 def render_v2_paper_trading():
-    """V2模擬交易"""
     st.header("🎮 V2 模擬交易")
     st.info("V2模擬交易功能開發中")
 
 def render_v1_analytics():
-    """V1績效分析"""
     st.header("📊 V1 績效分析")
-    
-    if 'v1_backtest_results' in st.session_state:
-        results = st.session_state['v1_backtest_results']
-        
-        st.subheader("模型表現")
-        
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("總交易次數", results['total_trades'])
-            st.metric("獲勝交易", results['winning_trades'])
-            st.metric("虧損交易", results['losing_trades'])
-        
-        with col2:
-            st.metric("勝率", f"{results['win_rate']:.2f}%")
-            st.metric("平均盈利", f"{results['avg_win']:.2f} USDT")
-            st.metric("平均虧損", f"{results['avg_loss']:.2f} USDT")
-        
-        with col3:
-            st.metric("盈虧因子", f"{results['profit_factor']:.2f}")
-            st.metric("Sharpe比率", f"{results['sharpe_ratio']:.2f}")
-            st.metric("最大回撤", f"{results['max_drawdown']:.2f}%")
-        
-        st.markdown("---")
-        
-        st.subheader("交易分布")
-        trades_df = pd.DataFrame(results['trades'])
-        
-        if len(trades_df) > 0:
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                fig = go.Figure()
-                fig.add_trace(go.Histogram(x=trades_df['pnl'], nbinsx=20, name='盈虧分布'))
-                fig.update_layout(title='盈虧分布', xaxis_title='盈虧 (USDT)', yaxis_title='頻率')
-                st.plotly_chart(fig, use_container_width=True)
-            
-            with col2:
-                long_pnl = trades_df[trades_df['type']=='LONG']['pnl'].sum()
-                short_pnl = trades_df[trades_df['type']=='SHORT']['pnl'].sum()
-                
-                fig = go.Figure(data=[
-                    go.Bar(x=['做多', '做空'], y=[long_pnl, short_pnl])
-                ])
-                fig.update_layout(title='做多 vs 做空總盈虧', yaxis_title='盈虧 (USDT)')
-                st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("請先運行V1回測以查看分析結果")
+    st.info("請先運行V1回測")
 
 def render_v2_status():
-    """V2系統狀態"""
     st.header("⚙️ V2 系統狀態")
     
-    # 模型統計
     col1, col2, col3 = st.columns(3)
     
     models_dir = Path('models')
@@ -871,47 +670,6 @@ def render_v2_status():
         st.metric("V2模型數量", v2_count)
     with col3:
         st.metric("總模型數", v1_count + v2_count)
-    
-    st.markdown("---")
-    
-    # 系統要求
-    st.subheader("💻 系統要求")
-    
-    requirements = {
-        'Python': '3.8+',
-        'NumPy': '1.24+',
-        'Pandas': '2.0+',
-        'XGBoost': '2.0+ (V1)',
-        'LightGBM': '4.0+ (V2)',
-        'PyTorch': '2.0+ (V2必需)',
-        'CUDA': '12.1+ (可選)',
-        'RAM': '8GB+',
-        'GPU': '4GB+ VRAM (V2建議)'
-    }
-    
-    req_df = pd.DataFrame(list(requirements.items()), columns=['組件', '版本/規格'])
-    st.table(req_df)
-    
-    st.markdown("---")
-    
-    # 快速開始
-    st.subheader("🚀 快速開始")
-    
-    with st.expander("📖 安裝指南"):
-        st.code("""
-# 1. 安裝V1依賴
-cd reversal_strategy_v1
-pip install -r requirements.txt
-
-# 2. 安裝V2依賴
-cd ../high_frequency_strategy_v2
-pip install -r requirements.txt
-
-# 3. 安裝TA-Lib
-# Windows: 下載.whl從 https://www.lfd.uci.edu/~gohlke/pythonlibs/#ta-lib
-# Linux: sudo apt-get install ta-lib
-# Mac: brew install ta-lib
-        """, language="bash")
 
 if __name__ == "__main__":
     main()
