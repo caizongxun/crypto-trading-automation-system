@@ -44,6 +44,9 @@ class Predictor:
         # 計算類別權重
         class_weights = self._calculate_class_weights(y_train_lgb)
         
+        # 生成樣本權重陣列
+        sample_weights_train = np.array([class_weights[int(label)] for label in y_train_lgb])
+        
         # LightGBM參數 (防止過擬合)
         params = {
             'objective': 'multiclass',
@@ -73,7 +76,7 @@ class Predictor:
         train_data = lgb.Dataset(
             X_train, 
             label=y_train_lgb,
-            weight=class_weights[y_train_lgb]
+            weight=sample_weights_train
         )
         val_data = lgb.Dataset(
             X_val,
@@ -114,7 +117,7 @@ class Predictor:
         weights = {}
         for cls, count in zip(unique, counts):
             # 反比例加權: 樣本少的類別獲得更高權重
-            weights[cls] = total / (len(unique) * count)
+            weights[int(cls)] = total / (len(unique) * count)
         
         # 歸一化
         max_weight = max(weights.values())
