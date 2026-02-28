@@ -1,6 +1,6 @@
 """
 V4 Neural Kelly Strategy - Complete GUI
-V4 LSTM + Kelly策略完整界面 - 支持GUI內直接訓練
+V4 LSTM + Kelly策略完整界面 - 支援GUI內直接訓練
 """
 import streamlit as st
 import sys
@@ -10,14 +10,16 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime
 import numpy as np
-import threading
-import queue
 
 # 添加路徑
 project_root = Path(__file__).parent.parent
 v4_root = Path(__file__).parent
+v4_adaptive = project_root / 'adaptive_strategy_v4'
+
+# 添加所有可能的路徑
 sys.path.insert(0, str(project_root))
 sys.path.insert(0, str(v4_root))
+sys.path.insert(0, str(v4_adaptive))
 
 st.set_page_config(
     page_title="V4 Neural Kelly Strategy",
@@ -48,6 +50,15 @@ def main():
         """)
         
         st.markdown("---")
+        
+        # 檢查模組狀態
+        v4_status = check_v4_modules()
+        if v4_status['all_ready']:
+            st.success(f"✅ V4模組: {v4_status['source']}")
+        else:
+            st.warning(f"⚠️ 使用備用路徑: {v4_status['source']}")
+        
+        st.markdown("---")
         st.warning("⚠️ 實驗階段\n建議小資金測試")
     
     tab1, tab2, tab3 = st.tabs(["📚 模型訓練", "📊 回測分析", "ℹ️ 關於V4"])
@@ -61,8 +72,53 @@ def main():
     with tab3:
         render_info_tab()
 
+def check_v4_modules():
+    """檢查V4模組是否可用"""
+    # 嘗試從v4_neural_kelly_strategy載入
+    try:
+        if (v4_root / 'core' / 'neural_predictor.py').exists():
+            return {'all_ready': True, 'source': 'v4_neural_kelly_strategy'}
+    except:
+        pass
+    
+    # 嘗試從adaptive_strategy_v4載入
+    try:
+        if (v4_adaptive / 'core' / 'neural_predictor.py').exists():
+            return {'all_ready': True, 'source': 'adaptive_strategy_v4'}
+    except:
+        pass
+    
+    return {'all_ready': False, 'source': 'none'}
+
 def render_training_tab():
     st.header("V4 模型訓練")
+    
+    # 檢查模組
+    v4_status = check_v4_modules()
+    if not v4_status['all_ready']:
+        st.error("""
+        ❌ 找不到V4模組
+        
+        請選擇以下任一方法:
+        
+        **方法1: 複製檔案 (推薦)**
+        ```bash
+        python copy_v4_files.py
+        ```
+        
+        **方法2: 使用符號連結**
+        ```bash
+        # Linux/Mac
+        ln -s adaptive_strategy_v4 v4_neural_kelly_strategy
+        
+        # Windows (管理員權限)
+        mklink /D v4_neural_kelly_strategy adaptive_strategy_v4
+        ```
+        
+        **方法3: 直接使用adaptive_strategy_v4**
+        V4模組已在adaptive_strategy_v4資料夾中
+        """)
+        return
     
     col1, col2 = st.columns([1, 2])
     
@@ -166,7 +222,8 @@ def render_training_tab():
                 'atr_profit': atr_profit,
                 'atr_loss': atr_loss,
                 'min_volume': min_volume,
-                'min_trend': min_trend
+                'min_trend': min_trend,
+                'module_source': v4_status['source']
             }
             st.session_state['v4_training_started'] = True
             st.session_state['training_in_progress'] = True
@@ -268,27 +325,19 @@ def train_model_in_gui(params, progress_placeholder, log_placeholder, metrics_pl
         return module
     
     try:
-        # 載入V4模組 (先嘗試v4_neural_kelly_strategy,失敗則用adaptive_strategy_v4)
-        v4_paths = [
-            (v4_root, 'v4'),
-            (project_root / 'adaptive_strategy_v4', 'v4_fallback')
-        ]
+        # 根據module_source選擇路徑
+        if params['module_source'] == 'v4_neural_kelly_strategy':
+            base_path = v4_root
+        else:
+            base_path = v4_adaptive
         
-        modules_loaded = False
-        for path, prefix in v4_paths:
-            try:
-                label_gen = load_module(path / 'core' / 'label_generator.py', f'{prefix}_label_gen')
-                feature_eng = load_module(path / 'core' / 'feature_engineer.py', f'{prefix}_feature_eng')
-                predictor = load_module(path / 'core' / 'neural_predictor.py', f'{prefix}_predictor')
-                loader = load_module(path / 'data' / 'hf_loader.py', f'{prefix}_loader')
-                modules_loaded = True
-                log_placeholder.info(f"✅ 模組加載成功 (來源: {path.name})")
-                break
-            except:
-                continue
+        log_placeholder.info(f"📂 使用模組: {base_path.name}")
         
-        if not modules_loaded:
-            raise Exception("無法加載V4模組,請執行: python copy_v4_files.py")
+        # 載入模組
+        label_gen = load_module(base_path / 'core' / 'label_generator.py', 'v4_label_gen')
+        feature_eng = load_module(base_path / 'core' / 'feature_engineer.py', 'v4_feature_eng')
+        predictor = load_module(base_path / 'core' / 'neural_predictor.py', 'v4_predictor')
+        loader = load_module(base_path / 'data' / 'hf_loader.py', 'v4_loader')
         
         LabelGenerator = label_gen.LabelGenerator
         FeatureEngineer = feature_eng.FeatureEngineer
@@ -397,14 +446,15 @@ def train_model_in_gui(params, progress_placeholder, log_placeholder, metrics_pl
         log_placeholder.success(f"[5/6] ✅ 訓練完成 | 準確率:{results['final_accuracy']:.3f}")
         
         # 顯示訓練指標
-        metrics_col1, metrics_col2, metrics_col3 = st.columns(3)
-        with metrics_col1:
-            st.metric("最終準確率", f"{results['final_accuracy']:.3f}")
-        with metrics_col2:
-            st.metric("最佳驗證Loss", f"{results['best_val_loss']:.4f}")
-        with metrics_col3:
-            device = "GPU" if results.get('device') == 'cuda' else "CPU"
-            st.metric("訓練設備", device)
+        with metrics_placeholder.container():
+            metrics_col1, metrics_col2, metrics_col3 = st.columns(3)
+            with metrics_col1:
+                st.metric("最終準確率", f"{results['final_accuracy']:.3f}")
+            with metrics_col2:
+                st.metric("最佳驗證Loss", f"{results['best_val_loss']:.4f}")
+            with metrics_col3:
+                device = "GPU" if results.get('device') == 'cuda' else "CPU"
+                st.metric("訓練設備", device)
         
         # 步驟6: 保存模型
         progress_placeholder.progress(0.95)
@@ -447,159 +497,14 @@ def train_model_in_gui(params, progress_placeholder, log_placeholder, metrics_pl
 
 def render_backtest_tab():
     st.header("V4 回測分析")
+    st.info("🚧 回測功能開發中,請使用命令行進行回測")
     
-    models_dir = project_root / 'models'
-    v4_models = []
-    if models_dir.exists():
-        v4_models = [d.name for d in models_dir.iterdir() if d.is_dir() and '_v4_' in d.name]
-    
-    if not v4_models:
-        st.warning("""⚠️ 沒有V4模型
-        
-        請先在「模型訓練」頁面訓練模型
-        """)
-        return
-    
-    col1, col2 = st.columns([1, 2])
-    
-    with col1:
-        st.subheader("回測參數")
-        
-        # 優先顯示最新模型
-        if 'latest_v4_model' in st.session_state and st.session_state['latest_v4_model'] in v4_models:
-            default_idx = v4_models.index(st.session_state['latest_v4_model'])
-        else:
-            default_idx = 0
-        
-        selected_model = st.selectbox("選擇模型", v4_models, index=default_idx)
-        
-        # 顯示模型信息
-        model_dir = models_dir / selected_model
-        if (model_dir / 'model_config.json').exists():
-            with open(model_dir / 'model_config.json', 'r') as f:
-                config = json.load(f)
-                st.markdown("**模型信息**")
-                model_type = config.get('model_type', 'lstm').upper()
-                st.text(f"架構: {model_type}")
-                st.text(f"訓練: {config.get('training_date', 'N/A')}")
-                st.text(f"特徵: {config.get('feature_count', 'N/A')}個")
-                if 'train_results' in config:
-                    r = config['train_results']
-                    st.text(f"準確率: {r.get('final_accuracy', 0):.3f}")
-        
-        st.markdown("---")
-        st.markdown("**💰 資金設定**")
-        capital = st.number_input("初始資金", 1000, 100000, 10000, 1000)
-        
-        st.markdown("**📊 Kelly參數**")
-        kelly_fraction = st.slider("Kelly分數", 0.10, 0.50, 0.25, 0.05)
-        max_leverage = st.slider("最大槓桿", 1, 5, 3, 1)
-        
-        st.info(f"""
-        **當前配置:**
-        Kelly: {kelly_fraction} (1/{int(1/kelly_fraction)} Kelly)
-        單筆最大倉位: {kelly_fraction*100:.0f}%
-        最大槓桿: {max_leverage}x
-        """)
-        
-        st.markdown("---")
-        backtest_button = st.button("📊 開始回測", type="primary", use_container_width=True)
-        
-        if backtest_button:
-            st.session_state['v4_backtest_params'] = {
-                'model': selected_model,
-                'capital': capital,
-                'kelly_fraction': kelly_fraction,
-                'max_leverage': max_leverage
-            }
-            st.session_state['v4_backtest_started'] = True
-    
-    with col2:
-        st.subheader("回測結果")
-        
-        if st.session_state.get('v4_backtest_started', False):
-            params = st.session_state['v4_backtest_params']
-            
-            st.info("⏳ 回測功能開發中...")
-            st.warning("""
-            **臨時方案 - 使用命令行:**
-            
-            ```bash
-            python v4_neural_kelly_strategy/backtest.py \\
-                --model {} \\
-                --capital {} \\
-                --kelly-fraction {} \\
-                --max-leverage {}
-            ```
-            
-            回測結果將自動保存並在下次刷新時顯示
-            """.format(
-                params['model'],
-                params['capital'],
-                params['kelly_fraction'],
-                params['max_leverage']
-            ))
-            
-            # 檢查是否有回測結果
-            results_dir = models_dir / params['model'] / 'backtest_results'
-            if results_dir.exists() and (results_dir / 'metrics.json').exists():
-                st.success("✅ 發現回測結果!")
-                
-                with open(results_dir / 'metrics.json', 'r') as f:
-                    metrics = json.load(f)
-                
-                st.markdown("---")
-                st.subheader("績效指標")
-                
-                col_a, col_b, col_c, col_d = st.columns(4)
-                with col_a:
-                    st.metric("總交易", metrics.get('total_trades', 0))
-                    st.metric("勝率", f"{metrics.get('win_rate', 0)*100:.1f}%")
-                with col_b:
-                    st.metric("總報酬", f"{metrics.get('total_return', 0)*100:.1f}%")
-                    st.metric("盈虧因子", f"{metrics.get('profit_factor', 0):.2f}")
-                with col_c:
-                    st.metric("Sharpe", f"{metrics.get('sharpe_ratio', 0):.2f}")
-                    st.metric("最大回撤", f"{metrics.get('max_drawdown', 0)*100:.1f}%")
-                with col_d:
-                    st.metric("平均Kelly", f"{metrics.get('avg_kelly', 0)*100:.1f}%")
-                    st.metric("平均槓桿", f"{metrics.get('avg_leverage', 0):.2f}x")
-                
-                # 權益曲線
-                if (results_dir / 'equity_curve.csv').exists():
-                    equity_df = pd.read_csv(results_dir / 'equity_curve.csv')
-                    
-                    fig = go.Figure()
-                    fig.add_trace(go.Scatter(
-                        x=equity_df['timestamp'],
-                        y=equity_df['equity'],
-                        mode='lines',
-                        name='權益',
-                        line=dict(color='#00d4ff', width=2)
-                    ))
-                    fig.update_layout(
-                        title='權益曲線',
-                        height=400,
-                        xaxis_title='時間',
-                        yaxis_title='權益 (USDT)'
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-            
-            st.session_state['v4_backtest_started'] = False
-        else:
-            st.info("""
-            **使用步驟:**
-            
-            1. 選擇已訓練的模型
-            2. 設定Kelly參數和槓桿
-            3. 點擊「開始回測」
-            4. 查看回測結果
-            
-            **Kelly分數建議:**
-            - 保守: 0.20 (1/5 Kelly)
-            - 平衡: 0.25 (1/4 Kelly) ✅
-            - 激進: 0.30 (⚠️ 高風險)
-            """)
+    st.code("""
+    python v4_neural_kelly_strategy/backtest.py \\
+        --model MODEL_NAME \\
+        --kelly-fraction 0.25 \\
+        --max-leverage 3
+    """)
 
 def render_info_tab():
     st.header("關於V4 Neural Kelly Strategy")
@@ -627,14 +532,6 @@ def render_info_tab():
         - Kelly > 40% + 信心 > 70% → 3x
         - Kelly > 30% + 信心 > 60% → 2x
         - 其他 → 1x
-        
-        **4. 六層風控**
-        - Kelly門檻過濾
-        - 倉位上限控制
-        - 連敗保護機制
-        - 回撤限制管理
-        - 波動率自適應
-        - 信心度過濾
         """)
     
     with col2:
@@ -655,47 +552,6 @@ def render_info_tab():
             '目標值': ['60-65%', '>2.0', '>2.0', '80-100%', '100-120']
         })
         st.dataframe(metrics_df, use_container_width=True)
-        
-        st.markdown("---")
-        st.subheader("⚠️ 風險警告")
-        st.error("""
-        **重要提醒:**
-        
-        1. V4處於實驗階段
-        2. 高報酬伴隨高風險
-        3. Kelly依賴準確的勝率/賠率預測
-        4. 動態槓桿需嚴格風控
-        5. 實盤前充分測試(30天+)
-        
-        **建議起步:**
-        - 資金: 1000-5000 USDT
-        - Kelly分數: 0.20-0.25
-        - 槓桿: 從1x開始
-        - 30天穩定盈利後再增加
-        """)
-    
-    st.markdown("---")
-    st.subheader("📚 文檔資源")
-    
-    doc_col1, doc_col2, doc_col3 = st.columns(3)
-    
-    with doc_col1:
-        st.markdown("""**快速開始**
-        - [V4 Quick Start](../V4_QUICKSTART.md)
-        - [完整指南](USAGE.md)
-        """)
-    
-    with doc_col2:
-        st.markdown("""**技術文檔**
-        - [V4總結](../V4_SUMMARY.md)
-        - [Kelly準則](https://en.wikipedia.org/wiki/Kelly_criterion)
-        """)
-    
-    with doc_col3:
-        st.markdown("""**代碼倉庫**
-        - [GitHub](https://github.com/caizongxun/crypto-trading-automation-system)
-        - [HuggingFace數據](https://huggingface.co/datasets/caizongxun/crypto_market_data)
-        """)
 
 if __name__ == "__main__":
     main()
